@@ -165,3 +165,28 @@ describe('fetchGraph', () => {
     });
   });
 });
+
+describe('DEFAULT_BACKEND_URL resolution', () => {
+  afterEach(() => {
+    delete window.__GITNEXUS_CONFIG__;
+    vi.resetModules();
+  });
+
+  it('falls back to localhost:4747 when no config is injected', async () => {
+    delete window.__GITNEXUS_CONFIG__;
+    const { DEFAULT_BACKEND_URL } = await import('../../src/config/ui-constants');
+    expect(DEFAULT_BACKEND_URL).toBe('http://localhost:4747');
+  });
+
+  it('uses window.__GITNEXUS_CONFIG__.backendUrl when set', async () => {
+    window.__GITNEXUS_CONFIG__ = { backendUrl: 'http://10.0.0.1:4747' };
+    const { DEFAULT_BACKEND_URL } = await import('../../src/config/ui-constants');
+    expect(DEFAULT_BACKEND_URL).toBe('http://10.0.0.1:4747');
+  });
+
+  it('falls back to localhost:4747 when config object has no backendUrl', async () => {
+    window.__GITNEXUS_CONFIG__ = {};
+    const { DEFAULT_BACKEND_URL } = await import('../../src/config/ui-constants');
+    expect(DEFAULT_BACKEND_URL).toBe('http://localhost:4747');
+  });
+});

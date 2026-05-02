@@ -30,6 +30,13 @@ services:
     container_name: ${WEB_CONTAINER_NAME:-gitnexus-web}
     ports:
       - '${WEB_HOST_PORT:-4173}:4173'
+    # Optional: override the backend URL served to the browser.
+    # Required when the gitnexus-server is not reachable at http://localhost:4747
+    # from the user's browser (e.g. remote server deployments).
+    # Use http://host.docker.internal:4747 on Docker Desktop (Mac/Windows),
+    # or the server's LAN IP for Linux hosts.
+    # environment:
+    #   - GITNEXUS_BACKEND_URL=http://host.docker.internal:4747
     depends_on:
       gitnexus-server:
         condition: service_healthy

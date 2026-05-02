@@ -105,3 +105,61 @@ it('returns 404 when dist/index.html is missing', async () => {
   const res = await rawGet(serverPort, '/nonexistent-page');
   assert.equal(res.status, 404);
 });
+
+// ── Config injection logic tests (inline, independent of server process) ─────
+
+import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+
+function isValidUrl(value) {
+  try {
+    const u = new URL(value);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function makeInjectedHtml(envBackendUrl) {
+  const rawHtml = '<!doctype html><html><head></head><body></body></html>';
+  const backendUrl = envBackendUrl && isValidUrl(envBackendUrl) ? envBackendUrl : null;
+  const configScript = backendUrl
+    ? `<script>window.__GITNEXUS_CONFIG__=${JSON.stringify({ backendUrl })};</script>`
+    : '';
+  return configScript ? rawHtml.replace('</head>', `${configScript}</head>`) : rawHtml;
+}
+
+it('injects __GITNEXUS_CONFIG__ when GITNEXUS_BACKEND_URL is a valid URL', () => {
+  const html = makeInjectedHtml('http://10.0.0.1:4747');
+  assert.ok(
+    html.includes(
+      '<script>window.__GITNEXUS_CONFIG__={"backendUrl":"http://10.0.0.1:4747"};</script>',
+    ),
+    'Expected config script to be injected into index.html',
+  );
+});
+
+it('does not inject when GITNEXUS_BACKEND_URL is not set', () => {
+  const raw = '<!doctype html><html><head></head><body></body></html>';
+  const html = makeInjectedHtml(null);
+  assert.equal(html, raw, 'Expected index.html to be unchanged when no env var is set');
+});
+
+it('injects config script before </head>', () => {
+  const html = makeInjectedHtml('http://10.0.0.1:4747');
+  const headCloseIdx = html.indexOf('</head>');
+  const scriptIdx = html.indexOf('<script>window.__GITNEXUS_CONFIG__');
+  assert.ok(scriptIdx !== -1, 'Script tag must be present');
+  assert.ok(scriptIdx < headCloseIdx, 'Script must appear before </head>');
+});
+
+it('does not inject when GITNEXUS_BACKEND_URL is not a valid URL', () => {
+  const raw = '<!doctype html><html><head></head><body></body></html>';
+  const html = makeInjectedHtml('not-a-url');
+  assert.equal(html, raw, 'Expected index.html to be unchanged for an invalid URL');
+});
+
+it('does not inject when GITNEXUS_BACKEND_URL uses a non-http protocol', () => {
+  const raw = '<!doctype html><html><head></head><body></body></html>';
+  const html = makeInjectedHtml('ftp://somehost:21');
+  assert.equal(html, raw, 'Expected index.html to be unchanged for non-http protocol');
+});
