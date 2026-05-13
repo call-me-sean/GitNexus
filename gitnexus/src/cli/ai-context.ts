@@ -199,7 +199,9 @@ async function fileExists(filePath: string): Promise<boolean> {
 async function upsertGitNexusSection(
   filePath: string,
   content: string,
-): Promise<'created' | 'updated' | 'appended'> {
+  projectName: string,
+  stats: RepoStats,
+): Promise<'created' | 'updated' | 'appended' | 'preserved'> {
   const exists = await fileExists(filePath);
 
   if (!exists) {
@@ -232,18 +234,27 @@ async function upsertGitNexusSection(
     // custom layout and only update the stats line (node/edge/flow counts).
     // This lets teams trim the verbose default template to a lean format without
     // having it overwritten on every `gitnexus analyze`.
+    //
+    // Note: the keep-marker check operates on `existingSection` (the substring
+    // between valid section markers identified by findSectionMarkerIndex), so
+    // a keep marker in user prose OUTSIDE the GitNexus block has no effect.
     if (existingSection.includes('<!-- gitnexus:keep -->')) {
-      // Match both formats:
-      //   "Indexed as **name** (N symbols, M relationships, P execution flows)"
-      //   "This project is indexed by GitNexus as **name** (N symbols, ...)"
-      const statsPattern = /(?:Indexed as|indexed by GitNexus as) \*\*[^*]+\*\* \([^)]+\)/;
+      // Build the new stats line from the caller-provided values directly.
+      // We do NOT re-extract from `content` because:
+      //   (a) first-bold extraction is fragile if the template evolves
+      //   (b) the parenthesized-text fallback can match unrelated tuples
+      //       like `({target: "symbolName", direction: "upstream"})`
+      //       when noStats is set
+      // Passing projectName + stats explicitly makes the contract obvious.
+      const newStatsInner = `${stats.nodes || 0} symbols, ${stats.edges || 0} relationships, ${stats.processes || 0} execution flows`;
+      const statsLine = `Indexed as **${projectName}** (${newStatsInner})`;
 
-      // Extract fresh stats from the newly generated content
-      const newName = (content.match(/\*\*([^*]+)\*\*/) || [])[1] || 'unknown';
-      const newStats =
-        (content.match(/\((\d[\d,]* symbols[^)]+)\)/) || content.match(/\(([^)]+)\)/) || [])[1] ||
-        '0 nodes';
-      const statsLine = `Indexed as **${newName}** (${newStats})`;
+      // Match either canonical phrasing, anchored to line boundaries (`^`/`$`
+      // with `m` flag) so we cannot replace prose embedded mid-paragraph like
+      // "you'll see it Indexed as **Foo** (note: ...)". The trailing period
+      // / sentence text the generator emits is preserved by sitting outside
+      // the matched pattern.
+      const statsPattern = /^(?:Indexed as|indexed by GitNexus as) \*\*[^*]+\*\* \([^)]+\)/m;
 
       if (statsPattern.test(existingSection)) {
         const updatedSection = existingSection.replace(statsPattern, statsLine);
@@ -252,8 +263,10 @@ async function upsertGitNexusSection(
         await fs.writeFile(filePath, (before + updatedSection + after).trim() + '\n', 'utf-8');
         return 'updated';
       }
-      // Keep marker present but no stats line found — preserve section as-is
-      return 'updated';
+      // Keep marker present but no stats line matched. Section is preserved
+      // unchanged on disk; return a distinct status so callers/CLI output
+      // don't mis-report this as 'updated' (which would imply a write).
+      return 'preserved';
     }
 
     // No keep marker — replace existing section with full verbose content
@@ -377,12 +390,12 @@ export async function generateAIContextFiles(
   if (!options?.skipAgentsMd) {
     // Create AGENTS.md (standard for Cursor, Windsurf, OpenCode, Cline, etc.)
     const agentsPath = path.join(repoPath, 'AGENTS.md');
-    const agentsResult = await upsertGitNexusSection(agentsPath, content);
+    const agentsResult = await upsertGitNexusSection(agentsPath, content, projectName, stats);
     createdFiles.push(`AGENTS.md (${agentsResult})`);
 
     // Create CLAUDE.md (for Claude Code)
     const claudePath = path.join(repoPath, 'CLAUDE.md');
-    const claudeResult = await upsertGitNexusSection(claudePath, content);
+    const claudeResult = await upsertGitNexusSection(claudePath, content, projectName, stats);
     createdFiles.push(`CLAUDE.md (${claudeResult})`);
   } else {
     createdFiles.push('AGENTS.md (skipped via --skip-agents-md)');
