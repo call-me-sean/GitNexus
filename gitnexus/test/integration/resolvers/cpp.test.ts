@@ -2228,6 +2228,28 @@ describe('C++ ADL — pointer-to-pointer args participate', () => {
   });
 });
 
+describe('C++ ADL — template specialization args contribute associated namespaces', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(path.join(FIXTURES, 'cpp-adl-template-args'), () => {});
+  }, 60000);
+
+  it('apply(v) where v is std::vector<N::T> resolves to N::apply via ADL template-arg namespace', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const applyCalls = calls.filter((c) => c.source === 'run' && c.target === 'apply');
+    expect(applyCalls.length).toBe(1);
+    expect(applyCalls[0].targetFilePath).toContain('audit.h');
+  });
+
+  it('applyNested(m) where m is std::map<std::string, std::vector<N::T>> resolves via nested template-arg namespace', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const applyCalls = calls.filter((c) => c.source === 'runNested' && c.target === 'applyNested');
+    expect(applyCalls.length).toBe(1);
+    expect(applyCalls[0].targetFilePath).toContain('audit.h');
+  });
+});
+
 describe('C++ ADL — int/long-collision overloads suppress via OVERLOAD_AMBIGUOUS', () => {
   let result: PipelineResult;
 

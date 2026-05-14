@@ -15,14 +15,13 @@
  *
  * ## Current boundary
  *
- * The current implementation covers ONE associated-entity rule: an argument that's a directly-named
- * class type (`audit::Event e`) contributes its **direct enclosing
- * namespace** to the candidate set. V2 extends that one step to
- * pointer-typed class args (`audit::Event* p`, `audit::Event** pp`):
- * they contribute the pointee class's enclosing namespace too. Reference
- * arguments, function-pointer arguments, template specializations,
- * base-class associated namespaces, and the rest of the full closure are
- * still deliberately excluded.
+ * The current implementation covers class-typed arguments (value and pointer)
+ * and template specializations with explicit type arguments:
+ *   - `audit::Event e`, `audit::Event* p`, `audit::Event** pp`
+ *   - `std::vector<audit::Event>` (template namespace + template-arg namespaces)
+ *
+ * Reference arguments, function-pointer arguments, base-class associated
+ * namespaces, and the rest of the full closure are still deliberately excluded.
  *
  * The current implementation also short-circuits to ADL only when ordinary lookup is empty
  * (`findCallableBindingInScope` returned undefined). ISO C++ would
@@ -67,13 +66,25 @@ import {
  */
 export interface CppAdlArgInfo {
   /** Simple class-like type name (last segment of qualified name); empty
-   *  for primitives, literals, function pointers, template specs, etc. */
+   *  for primitives, literals, function pointers, etc. */
   readonly simpleClassName: string;
   /** True when the variable's declarator contained one or more
    *  `pointer_declarator` wrappers. */
   readonly isPointer: boolean;
   /** True when the variable's declarator was a `reference_declarator`. */
   readonly isReference: boolean;
+  /** Template's own simple class-like name (e.g. `vector` for
+   *  `std::vector<N::T>`), empty when arg type is not a template spec. */
+  readonly templateSimpleClassName: string;
+  /** Template's own enclosing namespace (dot-qualified, e.g. `std`), empty
+   *  when unavailable / unqualified. */
+  readonly templateNamespace: string;
+  /** Class-like names extracted from explicit type template arguments,
+   *  recursively bounded. */
+  readonly templateArgClassNames: readonly string[];
+  /** Enclosing namespaces extracted from explicit type template arguments,
+   *  recursively bounded. */
+  readonly templateArgNamespaces: readonly string[];
 }
 
 const argInfoBySite = new Map<string, readonly CppAdlArgInfo[]>();
@@ -174,12 +185,28 @@ export function pickCppAdlCandidates(
   // Collect associated namespace QNames from every participating class-typed arg.
   const associatedNamespaces = new Set<string>();
   for (const arg of args) {
-    if (arg.simpleClassName === '') continue;
     if (arg.isReference) continue;
-    const classDef = findCppClassDefBySimpleName(arg.simpleClassName, scopes);
-    if (classDef === undefined) continue;
-    const nsQName = classToNamespaceQualifiedName.get(classDef.nodeId);
-    if (nsQName !== undefined) associatedNamespaces.add(nsQName);
+
+    if (arg.simpleClassName !== '') {
+      const classDef = findCppClassDefBySimpleName(arg.simpleClassName, scopes);
+      if (classDef !== undefined) {
+        const nsQName = classToNamespaceQualifiedName.get(classDef.nodeId);
+        if (nsQName !== undefined) associatedNamespaces.add(nsQName);
+      }
+    }
+
+    if (arg.templateNamespace.length > 0) associatedNamespaces.add(arg.templateNamespace);
+
+    for (const ns of arg.templateArgNamespaces) {
+      if (ns.length > 0) associatedNamespaces.add(ns);
+    }
+    for (const className of arg.templateArgClassNames) {
+      if (className.length === 0) continue;
+      const classDef = findCppClassDefBySimpleName(className, scopes);
+      if (classDef === undefined) continue;
+      const nsQName = classToNamespaceQualifiedName.get(classDef.nodeId);
+      if (nsQName !== undefined) associatedNamespaces.add(nsQName);
+    }
   }
   if (associatedNamespaces.size === 0) return undefined;
 
