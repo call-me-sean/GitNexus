@@ -808,9 +808,9 @@ function lookupAdlIdentifierType(identNode: SyntaxNode): CppAdlArgInfo {
     // `init_declarator > identifier` is value.
     // Function-pointer wrappers (`pointer_declarator > function_declarator`)
     // must not contribute ADL associated namespaces.
-    let isFunctionPointer = false;
     let isPointer = false;
     let isReference = false;
+    let isFunctionPointer = false;
     let inner: SyntaxNode = declarator;
     let nameText: string | null = null;
     let safety = 16; // bound walk depth defensively

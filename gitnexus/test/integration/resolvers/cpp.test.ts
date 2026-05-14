@@ -2103,7 +2103,9 @@ describe('C++ two-phase template lookup — cross-file namespace variant', () =>
 // Free-function calls with class-typed arguments must consider candidates
 // declared in the argument's enclosing namespace (associated namespace).
 // V1 boundary: only direct enclosing-namespace closure for value class-
-// typed args; pointer and reference args included, template-spec args excluded.
+// typed args; pointer/reference args and template specializations with
+// explicit type arguments included. Function pointers and base-class
+// associated namespaces remain excluded.
 // ---------------------------------------------------------------------------
 
 describe('C++ ADL — basic associated-namespace closure', () => {
