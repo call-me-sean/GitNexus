@@ -2308,7 +2308,9 @@ describe('C++ ADL — template specialization args contribute associated namespa
 
   it('applyStdConflict(v) is suppressed when ADL surfaces both N and std candidates', () => {
     const calls = getRelationships(result, 'CALLS');
-    const applyCalls = calls.filter((c) => c.source === 'runStdConflict' && c.target === 'applyStdConflict');
+    const applyCalls = calls.filter(
+      (c) => c.source === 'runStdConflict' && c.target === 'applyStdConflict',
+    );
     expect(applyCalls.length).toBe(0);
   });
 });
