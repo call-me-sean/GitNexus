@@ -132,7 +132,7 @@ export async function runCrossFileBindingPropagation(
   // Compiled query objects keyed by language name. Shared across all processCalls
   // invocations in this phase so the same tree-sitter query string is only
   // compiled once per language instead of once per file (O(1) vs O(N)).
-  const queryCache = new Map<SupportedLanguages, Parser.Query>();
+  const compiledQueryCache = new Map<SupportedLanguages, Parser.Query>();
   let timedOut = false;
 
   // Snapshot total topological candidates for progress math.  We walk the
@@ -242,7 +242,7 @@ export async function runCrossFileBindingPropagation(
         importedRawReturnTypesMap.size > 0 ? importedRawReturnTypesMap : undefined,
         undefined,
         undefined,
-        queryCache,
+        compiledQueryCache,
       );
       crossFileResolved++;
 

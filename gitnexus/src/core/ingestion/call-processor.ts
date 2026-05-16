@@ -774,7 +774,7 @@ export const processCalls = async (
    * propagation phase) should pass a long-lived map here to avoid O(N)
    * query recompilation overhead.
    */
-  compiledQueryCache?: Map<string, Parser.Query>,
+  compiledQueryCache?: Map<SupportedLanguages, Parser.Query>,
 ): Promise<ExtractedHeritage[]> => {
   const parser = await loadParser();
   const collectedHeritage: ExtractedHeritage[] = [];
