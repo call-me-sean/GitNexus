@@ -210,6 +210,55 @@ describe('runCrossFileBindingPropagation', () => {
     expect(caches[2]).toBe(caches[0]);
   });
 
+  it('emits live onProgress events every 25 files with N/M format', async () => {
+    // Verifies that the frozen-progress-display fix is correctly wired:
+    // onProgress must be called multiple times from the processing loop,
+    // not just once at phase start, so large repos show real movement in
+    // the UI instead of a frozen percentage bar.
+    const graph = createKnowledgeGraph();
+    const ctx = createResolutionContext();
+
+    const exportedTypeMap: ExportedTypeMap = new Map([
+      ['upstream.ts', new Map([['User', 'User']])],
+    ]);
+    ctx.importMap.set('upstream.ts', new Set());
+
+    const allPaths = ['upstream.ts'];
+    for (let i = 0; i < 50; i++) {
+      const file = `downstream${i}.ts`;
+      allPaths.push(file);
+      const bindings = new Map();
+      bindings.set('User', { sourcePath: 'upstream.ts', exportedName: 'User' });
+      ctx.namedImportMap.set(file, bindings);
+      ctx.importMap.set(file, new Set(['upstream.ts']));
+    }
+
+    const progressMessages: string[] = [];
+    const onProgress = vi.fn((p: { phase: string; percent: number; message: string }) => {
+      progressMessages.push(p.message);
+    });
+
+    await runCrossFileBindingPropagation(
+      graph,
+      ctx,
+      exportedTypeMap,
+      new Set(allPaths),
+      allPaths.length,
+      '/repo',
+      Date.now(),
+      onProgress,
+    );
+
+    // 1 initial call at phase start + 2 loop calls (at 25 and 50 files).
+    expect(onProgress).toHaveBeenCalledTimes(3);
+
+    // Loop messages must carry the "N/M files" format so the UI is informative.
+    const loopMessages = progressMessages.filter((m) => m.match(/\(\d+\/\d+ files\)/));
+    expect(loopMessages).toHaveLength(2);
+    expect(loopMessages[0]).toContain('(25/50 files)');
+    expect(loopMessages[1]).toContain('(50/50 files)');
+  });
+
   it('caps processing at MAX_CROSS_FILE_REPROCESS (2000)', async () => {
     const graph = createKnowledgeGraph();
     const ctx = createResolutionContext();
