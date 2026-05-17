@@ -64,6 +64,8 @@ export interface ResolveReferencesInput {
   readonly scopes: ScopeResolutionIndexes;
   /** Provider hooks consumed by the registries (e.g. `arityCompatibility`). */
   readonly providers?: RegistryProviders;
+  /** Optional owner-keyed member lookup used by Step 2 receiver/MRO walks. */
+  readonly ownedMembersByOwner?: RegistryContext['ownedMembersByOwner'];
 }
 
 export interface ResolveStats {
@@ -92,6 +94,7 @@ export function resolveReferenceSites(input: ResolveReferencesInput): ResolveRef
     defs: scopes.defs,
     qualifiedNames: scopes.qualifiedNames,
     moduleScopes: scopes.moduleScopes,
+    ownedMembersByOwner: input.ownedMembersByOwner,
     methodDispatch: scopes.methodDispatch,
     providers,
   };

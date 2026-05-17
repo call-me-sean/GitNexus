@@ -27,8 +27,9 @@
  *   is true, resolve the receiver's type at `startScope` (from
  *   `scope.typeBindings`), then walk the MRO via
  *   `MethodDispatchIndex.mroFor(ownerDefId)`. Membership per owner comes
- *   through `RegistryContext.methodDispatch` + owner lookups into
- *   `scope.ownedDefs`; each hit records a raw signal with the owner's
+ *   through an optional `RegistryContext.ownedMembersByOwner` hook when
+ *   supplied, otherwise via the compatibility fallback scan over
+ *   `defs.byId`; each hit records a raw signal with the owner's
  *   MRO depth.
  *
  * **Step 3 — Owner-scoped contributor.** When
@@ -333,10 +334,11 @@ function collectOwnedMembers(
   memberName: string,
   ctx: RegistryContext,
 ): readonly SymbolDefinition[] {
-  // An owner's members are defs whose `ownerId === ownerDefId` and whose
-  // simple name matches `memberName`. We iterate `defs.byId` — O(D) per
-  // call today. A future by-owner index would make this O(K); tracked as
-  // a follow-up optimization before Ring 3 flips go production.
+  const indexed = ctx.ownedMembersByOwner?.(ownerDefId, memberName);
+  if (indexed !== undefined) return indexed;
+
+  // Compatibility fallback for callers that still build `RegistryContext`
+  // without an owner-keyed lookup hook.
   const out: SymbolDefinition[] = [];
   for (const def of ctx.defs.byId.values()) {
     if (def.ownerId !== ownerDefId) continue;

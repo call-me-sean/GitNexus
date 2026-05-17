@@ -93,6 +93,17 @@ export interface OwnerScopedContributor {
   byName(name: string): readonly SymbolDefinition[];
 }
 
+/**
+ * Optional owner-keyed lookup hook for Step 2 receiver/MRO member walks.
+ * Callers with per-owner registries can supply this to avoid full-definition
+ * scans for each `(ownerDefId, memberName)` probe. Return an empty array on
+ * miss.
+ */
+export type OwnedMembersByOwnerLookup = (
+  ownerDefId: DefId,
+  memberName: string,
+) => readonly SymbolDefinition[];
+
 // ─── Top-level context threaded through every lookup ───────────────────────
 
 export interface RegistryContext {
@@ -100,6 +111,7 @@ export interface RegistryContext {
   readonly defs: DefIndex;
   readonly qualifiedNames: QualifiedNameIndex;
   readonly moduleScopes: ModuleScopeIndex;
+  readonly ownedMembersByOwner?: OwnedMembersByOwnerLookup;
   /**
    * Method-dispatch index; required for method/field registries that
    * honor `useReceiverTypeBinding`. Omit for class-only lookups.

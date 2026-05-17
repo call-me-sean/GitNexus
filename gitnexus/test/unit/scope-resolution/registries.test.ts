@@ -100,6 +100,7 @@ function makeCtx(
   opts: {
     mro?: Record<string, readonly string[]>;
     implsByInterface?: Record<string, readonly string[]>;
+    ownedMembersByOwner?: RegistryContext['ownedMembersByOwner'];
     arity?: (
       callsite: { arity: number },
       def: SymbolDefinition,
@@ -130,6 +131,7 @@ function makeCtx(
     defs: defIndex,
     qualifiedNames: qualifiedNameIndex,
     moduleScopes,
+    ownedMembersByOwner: opts.ownedMembersByOwner,
     methodDispatch,
     providers: opts.arity !== undefined ? { arityCompatibility: opts.arity } : {},
   };
@@ -573,6 +575,98 @@ describe('Step 3: owner-scoped contributor', () => {
 // ─── Step 2: type-binding / MRO walk ───────────────────────────────────────
 
 describe('Step 2: type-binding + MRO walk', () => {
+  it('uses ownedMembersByOwner before falling back to defs scans', () => {
+    const userClass = mkDef({ nodeId: 'def:User', type: 'Class', qualifiedName: 'User' });
+    const saveMethod = mkDef({
+      nodeId: 'def:User.save',
+      type: 'Method',
+      qualifiedName: 'User.save',
+      ownerId: 'def:User',
+    });
+    const callScope = mkScope({
+      id: 'scope:call',
+      parent: null,
+      typeBindings: { user: typeRef('User', 'scope:call') },
+    });
+    const ctx = makeCtx([callScope], [userClass], {
+      ownedMembersByOwner: (ownerDefId, memberName) =>
+        ownerDefId === 'def:User' && memberName === 'save' ? [saveMethod] : [],
+    });
+
+    const results = buildMethodRegistry(ctx).lookup('save', 'scope:call', {
+      explicitReceiver: { name: 'user' },
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.def).toBe(saveMethod);
+    expect(evidenceOfKind(results[0]!, 'type-binding')?.weight).toBe(
+      EvidenceWeights.typeBindingByMroDepth[0],
+    );
+  });
+
+  it('keeps hook-provided overloads available for arity filtering', () => {
+    const userClass = mkDef({ nodeId: 'def:User', type: 'Class', qualifiedName: 'User' });
+    const saveOne = mkDef({
+      nodeId: 'def:User.save1',
+      type: 'Method',
+      qualifiedName: 'User.save',
+      ownerId: 'def:User',
+      parameterCount: 1,
+    });
+    const saveTwo = mkDef({
+      nodeId: 'def:User.save2',
+      type: 'Method',
+      qualifiedName: 'User.save',
+      ownerId: 'def:User',
+      parameterCount: 2,
+    });
+    const callScope = mkScope({
+      id: 'scope:call',
+      parent: null,
+      typeBindings: { user: typeRef('User', 'scope:call') },
+    });
+    const ctx = makeCtx([callScope], [userClass], {
+      ownedMembersByOwner: (ownerDefId, memberName) =>
+        ownerDefId === 'def:User' && memberName === 'save' ? [saveTwo, saveOne] : [],
+      arity: (callsite, def) =>
+        (def.parameterCount ?? 0) === callsite.arity ? 'compatible' : 'incompatible',
+    });
+
+    const results = buildMethodRegistry(ctx).lookup('save', 'scope:call', {
+      explicitReceiver: { name: 'user' },
+      callsite: { arity: 1 },
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.def).toBe(saveOne);
+  });
+
+  it('resolves field members from ownedMembersByOwner through accepted-kind filtering', () => {
+    const userClass = mkDef({ nodeId: 'def:User', type: 'Class', qualifiedName: 'User' });
+    const nameField = mkDef({
+      nodeId: 'def:User.name',
+      type: 'Property',
+      qualifiedName: 'User.name',
+      ownerId: 'def:User',
+    });
+    const readScope = mkScope({
+      id: 'scope:read',
+      parent: null,
+      typeBindings: { user: typeRef('User', 'scope:read') },
+    });
+    const ctx = makeCtx([readScope], [userClass], {
+      ownedMembersByOwner: (ownerDefId, memberName) =>
+        ownerDefId === 'def:User' && memberName === 'name' ? [nameField] : [],
+    });
+
+    const results = buildFieldRegistry(ctx).lookup('name', 'scope:read', {
+      explicitReceiver: { name: 'user' },
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.def).toBe(nameField);
+  });
+
   it('emits type-binding evidence with MRO-depth-decayed weight (explicit receiver)', () => {
     const userClass = mkDef({ nodeId: 'def:User', type: 'Class', qualifiedName: 'User' });
     const saveMethod = mkDef({

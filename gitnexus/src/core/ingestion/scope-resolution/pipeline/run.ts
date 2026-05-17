@@ -188,42 +188,42 @@ export function runScopeResolution(
     return fileContents;
   };
 
-  // ── Phase 1: extract each file → ParsedFile ────────────────────────────
-  const parsedFiles: ParsedFile[] = [];
-  let filesSkipped = 0;
-  const treeCache = input.treeCache;
-  const preExtracted = input.preExtractedParsedFiles;
-  let preExtractedHits = 0;
-  for (const file of files) {
-    let parsed: ParsedFile | undefined;
-    // Fast path: a worker (during the parse phase) already produced a
-    // ParsedFile for this file via `extractParsedFile`. Reuse it
-    // directly — skips a tree-sitter re-parse on the main thread.
-    if (preExtracted !== undefined) {
-      parsed = preExtracted.get(file.path);
-      if (parsed !== undefined) preExtractedHits++;
-    }
-    if (parsed === undefined) {
-      const cachedTree = treeCache?.get(file.path);
-      parsed = extractParsedFile(
-        provider.languageProvider,
-        file.content,
-        file.path,
-        onWarn,
-        cachedTree,
-      );
-      if (parsed === undefined) {
-        filesSkipped++;
-        continue;
+    // ── Phase 1: extract each file → ParsedFile ────────────────────────────
+    const parsedFiles: ParsedFile[] = [];
+    let filesSkipped = 0;
+    const treeCache = input.treeCache;
+    const preExtracted = input.preExtractedParsedFiles;
+    let preExtractedHits = 0;
+    for (const file of files) {
+      let parsed: ParsedFile | undefined;
+      // Fast path: a worker (during the parse phase) already produced a
+      // ParsedFile for this file via `extractParsedFile`. Reuse it
+      // directly — skips a tree-sitter re-parse on the main thread.
+      if (preExtracted !== undefined) {
+        parsed = preExtracted.get(file.path);
+        if (parsed !== undefined) preExtractedHits++;
       }
+      if (parsed === undefined) {
+        const cachedTree = treeCache?.get(file.path);
+        parsed = extractParsedFile(
+          provider.languageProvider,
+          file.content,
+          file.path,
+          onWarn,
+          cachedTree,
+        );
+        if (parsed === undefined) {
+          filesSkipped++;
+          continue;
+        }
+      }
+      provider.populateOwners(parsed);
+      parsedFiles.push(parsed);
     }
-    provider.populateOwners(parsed);
-    parsedFiles.push(parsed);
-  }
-  if (PROF && preExtracted !== undefined) {
-    logger.warn(`[scope-resolution prof] pre-extracted hits: ${preExtractedHits}/${files.length}`);
-  }
-  provider.populateWorkspaceOwners?.(parsedFiles, { fileContents: getFileContents() });
+    if (PROF && preExtracted !== undefined) {
+      logger.warn(`[scope-resolution prof] pre-extracted hits: ${preExtractedHits}/${files.length}`);
+    }
+    provider.populateWorkspaceOwners?.(parsedFiles, { fileContents: getFileContents() });
 
   // Reconcile scope-resolution's ownership view into the SemanticModel.
   // See `reconcile-ownership.ts` for the full rationale (Contract
@@ -239,16 +239,16 @@ export function runScopeResolution(
   validateOwnershipParity(parsedFiles, input.model, onWarn);
   const readonlyModel: SemanticModel = input.model;
 
-  if (parsedFiles.length === 0) {
-    return {
-      filesProcessed: 0,
-      filesSkipped,
-      importsEmitted: 0,
-      resolve: { sitesProcessed: 0, referencesEmitted: 0, unresolved: 0 },
-      referenceEdgesEmitted: 0,
-      referenceSkipped: 0,
-    };
-  }
+    if (parsedFiles.length === 0) {
+      return {
+        filesProcessed: 0,
+        filesSkipped,
+        importsEmitted: 0,
+        resolve: { sitesProcessed: 0, referencesEmitted: 0, unresolved: 0 },
+        referenceEdgesEmitted: 0,
+        referenceSkipped: 0,
+      };
+    }
 
   const tExtract = PROF ? process.hrtime.bigint() : 0n;
 
@@ -342,6 +342,12 @@ export function runScopeResolution(
   const { referenceIndex, stats: resolveStats } = resolveReferenceSites({
     scopes: indexes,
     providers: registryProviders,
+    ownedMembersByOwner: (ownerDefId, memberName) => {
+      const methods = readonlyModel.methods.lookupAllByOwner(ownerDefId, memberName);
+      const field = readonlyModel.fields.lookupFieldByOwner(ownerDefId, memberName);
+      if (field === undefined) return methods;
+      return methods.length === 0 ? [field] : [...methods, field];
+    },
   });
   const tResolve = PROF ? process.hrtime.bigint() : 0n;
 
@@ -400,26 +406,26 @@ export function runScopeResolution(
     provider.importEdgeReason,
   );
 
-  if (PROF) {
-    const tEnd = process.hrtime.bigint();
-    const ns = (a: bigint, b: bigint): number => Number(b - a) / 1_000_000;
-    logger.warn(
-      `[scope-resolution prof] extract=${ns(tStart, tExtract).toFixed(0)}ms` +
-        ` finalize=${ns(tExtract, tFinalize).toFixed(0)}ms` +
-        ` propagate=${ns(tFinalize, tPropagate).toFixed(0)}ms` +
-        ` resolve=${ns(tPropagate, tResolve).toFixed(0)}ms` +
-        ` emit=${ns(tResolve, tEnd).toFixed(0)}ms` +
-        ` total=${ns(tStart, tEnd).toFixed(0)}ms` +
-        ` (${parsedFiles.length} files)`,
-    );
-  }
+    if (PROF) {
+      const tEnd = process.hrtime.bigint();
+      const ns = (a: bigint, b: bigint): number => Number(b - a) / 1_000_000;
+      logger.warn(
+        `[scope-resolution prof] extract=${ns(tStart, tExtract).toFixed(0)}ms` +
+          ` finalize=${ns(tExtract, tFinalize).toFixed(0)}ms` +
+          ` propagate=${ns(tFinalize, tPropagate).toFixed(0)}ms` +
+          ` resolve=${ns(tPropagate, tResolve).toFixed(0)}ms` +
+          ` emit=${ns(tResolve, tEnd).toFixed(0)}ms` +
+          ` total=${ns(tStart, tEnd).toFixed(0)}ms` +
+          ` (${parsedFiles.length} files)`,
+      );
+    }
 
-  return {
-    filesProcessed: parsedFiles.length,
-    filesSkipped,
-    importsEmitted,
-    resolve: resolveStats,
-    referenceEdgesEmitted: emitted + receiverExtras + unresolvedReceiverExtras + freeCallExtras,
-    referenceSkipped: skipped,
-  };
+    return {
+      filesProcessed: parsedFiles.length,
+      filesSkipped,
+      importsEmitted,
+      resolve: resolveStats,
+      referenceEdgesEmitted: emitted + receiverExtras + unresolvedReceiverExtras + freeCallExtras,
+      referenceSkipped: skipped,
+    };
 }
