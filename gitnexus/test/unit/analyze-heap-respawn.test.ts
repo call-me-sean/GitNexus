@@ -75,7 +75,9 @@ describe('analyzeCommand heap respawn', () => {
     // Signal-only child failures do not carry a numeric status, so the CLI
     // falls back to exit code 1.
     expect(process.exitCode).toBe(1);
-    const oomGuidance = cap.records().find((r) => r.msg.includes('Analysis likely ran out of memory.'));
+    const oomGuidance = cap
+      .records()
+      .find((r) => r.msg.includes('Analysis likely ran out of memory.'));
     expect(oomGuidance).toBeDefined();
     const msg = oomGuidance?.msg ?? '';
     expect(msg).toContain('NODE_OPTIONS="--max-old-space-size=24576"');
@@ -95,7 +97,9 @@ describe('analyzeCommand heap respawn', () => {
       };
       err.status = 1;
       err.signal = undefined;
-      err.stderr = Buffer.from('FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory');
+      err.stderr = Buffer.from(
+        'FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory',
+      );
       throw err;
     });
 
@@ -105,7 +109,9 @@ describe('analyzeCommand heap respawn', () => {
     await analyzeCommand(undefined, {});
 
     expect(process.exitCode).toBe(1);
-    expect(cap.records().some((r) => r.msg.includes('Analysis likely ran out of memory.'))).toBe(true);
+    expect(cap.records().some((r) => r.msg.includes('Analysis likely ran out of memory.'))).toBe(
+      true,
+    );
     cap.restore();
   });
 
@@ -130,7 +136,9 @@ describe('analyzeCommand heap respawn', () => {
     await analyzeCommand(undefined, {});
 
     expect(process.exitCode).toBe(1);
-    expect(cap.records().some((r) => r.msg.includes('Analysis likely ran out of memory.'))).toBe(true);
+    expect(cap.records().some((r) => r.msg.includes('Analysis likely ran out of memory.'))).toBe(
+      true,
+    );
     cap.restore();
   });
 
@@ -157,7 +165,9 @@ describe('analyzeCommand heap respawn', () => {
     await analyzeCommand(undefined, {});
 
     expect(process.exitCode).toBe(134);
-    expect(cap.records().some((r) => r.msg.includes('Analysis likely ran out of memory.'))).toBe(true);
+    expect(cap.records().some((r) => r.msg.includes('Analysis likely ran out of memory.'))).toBe(
+      true,
+    );
     cap.restore();
   });
 
@@ -182,7 +192,9 @@ describe('analyzeCommand heap respawn', () => {
     await analyzeCommand(undefined, {});
 
     expect(process.exitCode).toBe(2);
-    expect(cap.records().some((r) => r.msg.includes('Analysis likely ran out of memory.'))).toBe(false);
+    expect(cap.records().some((r) => r.msg.includes('Analysis likely ran out of memory.'))).toBe(
+      false,
+    );
     cap.restore();
   });
 });

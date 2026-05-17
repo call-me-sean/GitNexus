@@ -85,10 +85,18 @@ const STACK_FLAG = `--stack-size=${STACK_KB}`;
  */
 const childProcessLikelyOom = (err: unknown): boolean => {
   if (!err || typeof err !== 'object') return false;
-  const e = err as { status?: unknown; signal?: unknown; stderr?: unknown; stdout?: unknown; message?: unknown };
+  const e = err as {
+    status?: unknown;
+    signal?: unknown;
+    stderr?: unknown;
+    stdout?: unknown;
+    message?: unknown;
+  };
 
   const hasHeapOomSignature = (v: unknown): boolean => {
-    const text = (Buffer.isBuffer(v) ? v.toString('utf8') : typeof v === 'string' ? v : '').toLowerCase();
+    const text = (
+      Buffer.isBuffer(v) ? v.toString('utf8') : typeof v === 'string' ? v : ''
+    ).toLowerCase();
     if (!text) return false;
     return (
       text.includes('javascript heap out of memory') ||
