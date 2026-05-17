@@ -124,8 +124,8 @@ const childProcessLikelyOom = (err: unknown): boolean => {
 
 const forceHeapOOMForTestIfEnabled = (): void => {
   if (process.env.GITNEXUS_TEST_FORCE_HEAP_OOM !== '1') return;
-  // Allocate JS strings (not Buffers) so memory pressure comes from V8 heap
-  // itself and reliably triggers "JavaScript heap out of memory" across Node.
+  // Allocate JS strings (not Buffers) so pressure lands on V8 heap itself.
+  // Buffers can allocate off-heap, which makes OOM triggering less reliable.
   const chunks: string[] = [];
   for (;;) chunks.push('x'.repeat(1024 * 1024));
 };
