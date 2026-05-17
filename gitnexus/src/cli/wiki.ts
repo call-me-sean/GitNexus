@@ -37,13 +37,21 @@ export interface WikiCommandOptions {
   retries?: string;
 }
 
-function parsePositiveIntegerOption(value: string | undefined, flag: string): number | undefined {
+function parsePositiveIntegerOption(
+  value: string | undefined,
+  flag: string,
+  multiplier = 1,
+): number | undefined {
   if (value === undefined) return undefined;
   const trimmed = value.trim();
   if (!/^[1-9]\d*$/.test(trimmed)) {
     throw new Error(`${flag} must be a positive integer`);
   }
-  return parseInt(trimmed, 10);
+  const parsed = parseInt(trimmed, 10);
+  if (parsed > Math.floor(Number.MAX_SAFE_INTEGER / multiplier)) {
+    throw new Error(`${flag} is too large`);
+  }
+  return parsed;
 }
 
 /**
@@ -138,7 +146,7 @@ export const wikiCommand = async (inputPath?: string, options?: WikiCommandOptio
 
   let timeoutSeconds: number | undefined;
   try {
-    timeoutSeconds = parsePositiveIntegerOption(options?.timeout, '--timeout');
+    timeoutSeconds = parsePositiveIntegerOption(options?.timeout, '--timeout', 1000);
   } catch (error) {
     console.log(`  Error: ${(error as Error).message}\n`);
     process.exitCode = 1;

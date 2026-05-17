@@ -266,6 +266,7 @@ describe('WikiGenerator --review mode', () => {
 
 describe('wikiCommand --timeout validation', () => {
   const originalExitCode = process.exitCode;
+  const tooLargeTimeout = String(Math.floor(Number.MAX_SAFE_INTEGER / 1000) + 1);
 
   beforeEach(() => {
     vi.resetModules();
@@ -282,7 +283,7 @@ describe('wikiCommand --timeout validation', () => {
     process.exitCode = originalExitCode;
   });
 
-  it.each(['', '   ', '0', '-1', 'abc', '3.14'])(
+  it.each(['', '   ', '0', '-1', 'abc', '3.14', tooLargeTimeout])(
     'rejects invalid --timeout value %s before starting generation',
     async (timeout) => {
       const generatorCtor = vi.fn().mockImplementation(() => ({
@@ -343,7 +344,11 @@ describe('wikiCommand --timeout validation', () => {
 
       expect(process.exitCode).toBe(1);
       expect(generatorCtor).not.toHaveBeenCalled();
-      expect(consoleSpy).toHaveBeenCalledWith('  Error: --timeout must be a positive integer\n');
+      const expectedMessage =
+        timeout === tooLargeTimeout
+          ? '  Error: --timeout is too large\n'
+          : '  Error: --timeout must be a positive integer\n';
+      expect(consoleSpy).toHaveBeenCalledWith(expectedMessage);
     },
   );
 });
