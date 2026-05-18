@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { hasWorkerUnsafeLanguageMix } from '../../src/core/ingestion/pipeline-phases/parse-impl.js';
+import { hasWorkerUnsafeLanguageMix } from '../../src/core/ingestion/workers/worker-language-guard.js';
 
 describe('hasWorkerUnsafeLanguageMix', () => {
   it('returns false for non-C/C++ inputs', () => {
