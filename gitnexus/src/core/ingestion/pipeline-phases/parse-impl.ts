@@ -45,7 +45,11 @@ import {
 } from '../heritage-processor.js';
 import { createResolutionContext } from '../model/resolution-context.js';
 import { ASTCache, createASTCache } from '../ast-cache.js';
-import { type PipelineProgress, getLanguageFromFilename } from 'gitnexus-shared';
+import {
+  type PipelineProgress,
+  getLanguageFromFilename,
+  SupportedLanguages,
+} from 'gitnexus-shared';
 import { readFileContents } from '../filesystem-walker.js';
 import { isLanguageAvailable } from '../../tree-sitter/parser-loader.js';
 import { createWorkerPool } from '../workers/worker-pool.js';
@@ -95,6 +99,17 @@ const CHUNK_BYTE_BUDGET = (() => {
 
 type ScannedFile = { path: string; size: number };
 type ProgressFn = (progress: PipelineProgress) => void;
+
+const WORKER_UNSAFE_LANGUAGES = new Set<SupportedLanguages>([
+  SupportedLanguages.C,
+  SupportedLanguages.CPlusPlus,
+]);
+
+export const hasWorkerUnsafeLanguageMix = (files: readonly ScannedFile[]): boolean =>
+  files.some((f) => {
+    const language = getLanguageFromFilename(f.path);
+    return language !== null && WORKER_UNSAFE_LANGUAGES.has(language);
+  });
 
 /**
  * Chunked parse + resolve loop.
@@ -220,11 +235,19 @@ export async function runChunkedParseAndResolve(
   const MIN_FILES_FOR_WORKERS = options?.workerThresholdsForTest?.minFiles ?? 15;
   const MIN_BYTES_FOR_WORKERS = options?.workerThresholdsForTest?.minBytes ?? 512 * 1024;
   const totalBytes = parseableScanned.reduce((s, f) => s + f.size, 0);
+  const disableWorkersForNativeLanguages =
+    process.env.GITNEXUS_ALLOW_CPP_WORKERS !== '1' && hasWorkerUnsafeLanguageMix(parseableScanned);
+  if (disableWorkersForNativeLanguages) {
+    logger.warn(
+      'C/C++ files detected — using sequential parser path to avoid known worker-thread native crashes (e.g. `Napi::Error`). Set GITNEXUS_ALLOW_CPP_WORKERS=1 to force workers.',
+    );
+  }
 
   // Create worker pool once, reuse across chunks
   let workerPool: WorkerPool | undefined;
   if (
     !options?.skipWorkers &&
+    !disableWorkersForNativeLanguages &&
     (totalParseable >= MIN_FILES_FOR_WORKERS || totalBytes >= MIN_BYTES_FOR_WORKERS)
   ) {
     try {
