@@ -13,17 +13,8 @@ import {
 /**
  * Kotlin scope resolver for RFC #909 Ring 3.
  *
- * Kotlin is intentionally registered but not yet listed in
- * `MIGRATED_LANGUAGES`, matching the Java migration pattern from #1482:
- * the resolver can run in shadow/forced mode, while production default
- * stays on the legacy DAG until registry-primary parity reaches the
- * RFC threshold. Forced mode currently passes 154/175 fixtures (88%),
- * including core import, receiver, companion, default-param, vararg,
- * constructor, local assignment-chain, and collection-iteration fixtures.
- * Remaining gaps are advanced TypeEnv behaviors such as smart casts,
- * cross-file iterable return propagation, method-chain fixpoint cases,
- * overload target-id selection, virtual dispatch, and interface default
- * method dispatch.
+ * Kotlin is registered for scope-resolution but execution is currently
+ * held behind a phase-level safety gate while parity hardening continues.
  */
 export const kotlinScopeResolver: ScopeResolver = {
   language: SupportedLanguages.Kotlin,

@@ -822,7 +822,7 @@ export const processCalls = async (
     const language = getLanguageFromFilename(file.path);
     if (!language) continue;
     // Registry-primary gate: scope-based phase owns CALLS for this lang.
-    if (isRegistryPrimary(language)) continue;
+    if (isRegistryPrimary(language) && language !== SupportedLanguages.Kotlin) continue;
     if (!isLanguageAvailable(language)) {
       if (skippedByLang) {
         skippedByLang.set(language, (skippedByLang.get(language) ?? 0) + 1);
@@ -2920,7 +2920,12 @@ export const processCallsFromExtracted = async (
     // Registry-primary gate: skip Python (etc.) entirely when the
     // scope-based phase owns CALLS for this language.
     const fileLanguage = getLanguageFromFilename(filePath);
-    if (fileLanguage && isRegistryPrimary(fileLanguage)) continue;
+    if (
+      fileLanguage &&
+      isRegistryPrimary(fileLanguage) &&
+      fileLanguage !== SupportedLanguages.Kotlin
+    )
+      continue;
 
     ctx.enableCache(filePath);
     const widenCache: WidenCache = new Map();

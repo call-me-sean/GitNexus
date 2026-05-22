@@ -56,6 +56,8 @@ import { SupportedLanguages } from 'gitnexus-shared';
  *   3. **Legacy-path gating.** `call-processor.ts` / `import-processor.ts`
  *      skip per-language work when `isRegistryPrimary(lang)` is `true`,
  *      so this set also controls what gets silenced in the legacy DAG.
+ *      Kotlin is temporarily exempted while its scope-resolution phase
+ *      hardens to full parity.
  *
  * Add a language here ONLY after shadow parity ≥ 99% fixtures / ≥ 98%
  * corpus per RFC §6.4. TypeScript is temporarily accepted under the
@@ -75,6 +77,7 @@ export const MIGRATED_LANGUAGES: ReadonlySet<SupportedLanguages> = new Set<Suppo
   SupportedLanguages.CPlusPlus,
   SupportedLanguages.PHP,
   SupportedLanguages.JavaScript,
+  SupportedLanguages.Kotlin,
 ]);
 
 /**

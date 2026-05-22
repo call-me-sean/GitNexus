@@ -19,7 +19,7 @@ import { createASTCache } from '../ast-cache.js';
 import {
   type PipelineProgress,
   getLanguageFromFilename,
-  type SupportedLanguages,
+  SupportedLanguages,
 } from 'gitnexus-shared';
 import { readFileContents } from '../filesystem-walker.js';
 import { isLanguageAvailable } from '../../tree-sitter/parser-loader.js';
@@ -141,7 +141,7 @@ export async function runCrossFileBindingPropagation(
       // scope-resolution pipeline — processCalls skips them immediately. Skip
       // here too so we avoid the I/O cost (readFileContents) and map-building
       // overhead for files that would be no-ops anyway.
-      if (isRegistryPrimary(lang)) continue;
+      if (isRegistryPrimary(lang) && lang !== SupportedLanguages.Kotlin) continue;
       totalCandidates++;
     }
     if (totalCandidates >= MAX_CROSS_FILE_REPROCESS) break;
@@ -190,7 +190,7 @@ export async function runCrossFileBindingPropagation(
       // Registry-primary languages have their call resolution handled by the
       // scope-resolution pipeline — processCalls skips them immediately. Skip
       // here to avoid readFileContents I/O and map-building for no-op files.
-      if (isRegistryPrimary(lang)) continue;
+      if (isRegistryPrimary(lang) && lang !== SupportedLanguages.Kotlin) continue;
 
       levelCandidates.push({ filePath, seeded, importedReturns, importedRawReturns });
     }

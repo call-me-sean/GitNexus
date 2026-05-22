@@ -127,6 +127,10 @@ export const scopeResolutionPhase: PipelinePhase<ScopeResolutionOutput> = {
 
     for (const [lang, provider] of SCOPE_RESOLVERS) {
       if (!isRegistryPrimary(lang)) continue;
+      // Kotlin remains registry-primary for CI auto-discovery, but the
+      // runtime scope-resolution execution stays disabled until parity with
+      // the legacy DAG reaches 100% for the full fixture set.
+      if (lang === SupportedLanguages.Kotlin) continue;
 
       const langFiles = scannedFiles.filter((f) => getLanguageFromFilename(f.path) === lang);
       if (langFiles.length === 0) continue;
