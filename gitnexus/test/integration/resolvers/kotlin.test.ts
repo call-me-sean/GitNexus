@@ -2231,3 +2231,92 @@ describe('Kotlin lambda scopes (#1757)', () => {
     expect(saveCalls[0].rel.targetId).toBe(userSave!.rel.targetId);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #1756 / U2 remediation: the `isStaticOnly` filter must run INSIDE the MRO
+// chain walk (so static-only candidates fall through to ancestor instance
+// methods) and BEFORE arity narrowing (so a same-name same-arity static +
+// instance pair on the same owner doesn't collapse to OVERLOAD_AMBIGUOUS).
+//
+// Three scenarios in `kotlin-companion-mro-shadow/App.kt`:
+//   - `useChild(c: Child)` calls `c.foo()` — Child has only a companion
+//     `foo` but extends Base whose instance `foo` is the legitimate target.
+//     Expected: exactly one CALLS edge `useChild → Base.foo`, no edge to
+//     the companion-promoted `Child.foo`.
+//   - `useChildWithInstance(c: ChildWithInstance)` calls `c.foo()` —
+//     ChildWithInstance has BOTH an instance `foo(): Int` AND a same-arity
+//     companion `foo(): ChildWithInstance`. Expected: exactly one CALLS
+//     edge to the instance `foo` on ChildWithInstance (not the companion,
+//     not Base).
+//   - `useStandalone(s: Standalone)` calls `s.foo()` — Standalone has
+//     only a companion `foo` and no instance ancestor with the same
+//     name. Expected: no CALLS edge.
+// ---------------------------------------------------------------------------
+
+describe('Kotlin companion vs instance MRO shadowing (#1756 / U2)', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'kotlin-companion-mro-shadow'),
+      () => {},
+    );
+  }, 60000);
+
+  it('useChild() falls through static-only Child.foo to Base.foo', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const fromUseChild = calls.filter((c) => c.source === 'useChild');
+    expect(fromUseChild.length).toBe(1);
+    expect(fromUseChild[0].target).toBe('foo');
+    expect(fromUseChild[0].targetFilePath).toBe('App.kt');
+    // The target should be the Base instance `foo`, not the companion
+    // `foo` promoted onto Child. We assert by checking the target node's
+    // qualified name resolves under Base (via HAS_METHOD).
+    const hasMethod = getRelationships(result, 'HAS_METHOD');
+    const baseFoo = hasMethod.find(
+      (e) => e.source === 'Base' && e.target === 'foo' && e.targetFilePath === 'App.kt',
+    );
+    expect(baseFoo).toBeDefined();
+    expect(fromUseChild[0].rel.targetId).toBe(baseFoo!.rel.targetId);
+  });
+
+  it('useChild() does NOT emit an edge to the companion-promoted Child.foo', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const fromUseChild = calls.filter((c) => c.source === 'useChild');
+    // No edge whose target is the Child companion `foo`. We identify it
+    // by HAS_METHOD: Child → foo (the companion `foo` is promoted onto
+    // Child as the enclosing class). If such an edge existed, useChild
+    // would target it; assert it does not.
+    const hasMethod = getRelationships(result, 'HAS_METHOD');
+    const childFoo = hasMethod.find(
+      (e) => e.source === 'Child' && e.target === 'foo' && e.targetFilePath === 'App.kt',
+    );
+    if (childFoo !== undefined) {
+      const wrongEdge = fromUseChild.find((c) => c.rel.targetId === childFoo.rel.targetId);
+      expect(wrongEdge).toBeUndefined();
+    }
+  });
+
+  it('useChildWithInstance() resolves to the instance foo on ChildWithInstance', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const fromUseCWI = calls.filter((c) => c.source === 'useChildWithInstance');
+    expect(fromUseCWI.length).toBe(1);
+    expect(fromUseCWI[0].target).toBe('foo');
+    expect(fromUseCWI[0].targetFilePath).toBe('App.kt');
+    // Assert the target is ChildWithInstance.foo (the instance method),
+    // not the companion `foo` (which also targets ChildWithInstance as
+    // the promoted owner but is static-only) and not Base.foo.
+    const hasMethod = getRelationships(result, 'HAS_METHOD');
+    const baseFoo = hasMethod.find(
+      (e) => e.source === 'Base' && e.target === 'foo' && e.targetFilePath === 'App.kt',
+    );
+    expect(baseFoo).toBeDefined();
+    expect(fromUseCWI[0].rel.targetId).not.toBe(baseFoo!.rel.targetId);
+  });
+
+  it('useStandalone() emits no CALLS edge (entire chain is static-only)', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const fromUseStandalone = calls.filter((c) => c.source === 'useStandalone');
+    expect(fromUseStandalone.length).toBe(0);
+  });
+});

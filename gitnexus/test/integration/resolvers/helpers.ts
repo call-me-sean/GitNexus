@@ -136,6 +136,21 @@ const LEGACY_RESOLVER_PARITY_EXPECTED_FAILURES: Readonly<Record<string, Readonly
     // scope per the migration policy (the bug stops mattering once
     // Kotlin enters `MIGRATED_LANGUAGES` and legacy stops running).
     'crossover() invoking logger.create() on an instance emits NO CALLS edge',
+    // #1756 / U2 (remediation plan 2026-05-22-002) MRO shadow tests:
+    // the registry-primary path filters static-only candidates INSIDE
+    // the Case-4 MRO chain walk (`pickFirstNonStaticOnly` in
+    // `receiver-bound-calls.ts`), so a derived class whose only
+    // member is a companion-promoted static method falls through to
+    // an ancestor's legitimate instance method; if no ancestor has
+    // an instance method, no CALLS edge is emitted. The legacy DAG
+    // returns the static-only companion method via
+    // `lookupMethodByOwner` on the most-derived owner and emits a
+    // false `CALLS` edge to it. Same scope-resolver-only correctness
+    // class as the bare `crossover()` test above; backporting is out
+    // of scope per the migration policy.
+    'useChild() falls through static-only Child.foo to Base.foo',
+    'useChild() does NOT emit an edge to the companion-promoted Child.foo',
+    'useStandalone() emits no CALLS edge (entire chain is static-only)',
     // #1757 lambda scopes: the registry-primary path creates a Block
     // scope per `lambda_literal` and synthesizes scoped type-bindings
     // for the lambda parameter / implicit `it` (see
