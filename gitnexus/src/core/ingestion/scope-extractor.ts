@@ -124,7 +124,16 @@ export function extract(
 
   // ── Pass 1: build the scope tree ─────────────────────────────────────
   const scopeDrafts = pass1BuildScopes(partitioned.scope, filePath, provider);
-  const moduleScope = ensureModuleScope(scopeDrafts, matches.length, filePath);
+  const moduleScope = ensureModuleScope(scopeDrafts, filePath);
+  // Re-parent orphan drafts (parent === null, non-Module) under the
+  // Module scope. Replaces drafts with new ones carrying the correct
+  // parent — runs before content passes so bindings/ownedDefs are empty.
+  for (let i = 0; i < scopeDrafts.length; i++) {
+    const d = scopeDrafts[i];
+    if (d.parent === null && d.kind !== 'Module') {
+      scopeDrafts[i] = makeDraft(d.id, moduleScope.id, d.kind, d.range, d.filePath);
+    }
+  }
   const scopes = scopeDrafts.map(draftToScope);
   // buildScopeTree validates invariants (throws on violation) and exposes
   // the lookup contract consumed by Passes 2-5.
@@ -280,29 +289,29 @@ interface ScopeDraft {
 
 function ensureModuleScope(
   scopeDrafts: ScopeDraft[],
-  matchCount: number,
   filePath: string,
 ): ScopeDraft {
   const moduleScope = scopeDrafts.find((s) => s.kind === 'Module');
   if (moduleScope !== undefined) return moduleScope;
 
-  // Synthesize a path-based Module scope when none was emitted.
+  // Synthesize a Module scope spanning the full file. Without this,
+  // files whose tree-sitter root is ERROR (complex .phtml templates,
+  // namespace-less PHP scripts) have no Module scope — their captures
+  // exist but positionIndex.atPosition can't assign them to a scope,
+  // so references and declarations are silently dropped.
   //
-  // The original condition only synthesized for truly empty files
-  // (matchCount === 0). However, PHP template files (.phtml) and
-  // namespace-less scripts produce tree-sitter captures (matchCount > 0)
-  // but no @scope.module — the PHP grammar's `(program) @scope.module`
-  // query doesn't fire when the root node is ERROR (complex templates
-  // with mixed PHP/HTML/JS). Throwing here silently drops these files
-  // from the index, creating blind spots in dependency analysis.
-  //
-  // A synthetic path-based scope preserves the file's reference sites
-  // and declarations in the graph. The warning below maintains
-  // diagnostic visibility for provider authors.
-  // No warning here — the scope-extractor-bridge.ts catch block already
-  // logs scope extraction issues. Avoid importing logger (this module runs
-  // in both main thread and worker threads where logger may not resolve).
-  const range: Range = { startLine: 0, startCol: 0, endLine: 0, endCol: 0 };
+  // The range covers the entire file so positionIndex containment
+  // checks work for top-level references (not just those inside inner
+  // Function/Class scopes).
+  let endLine = 0;
+  let endCol = 0;
+  for (const d of scopeDrafts) {
+    if (d.range.endLine > endLine || (d.range.endLine === endLine && d.range.endCol > endCol)) {
+      endLine = d.range.endLine;
+      endCol = d.range.endCol;
+    }
+  }
+  const range: Range = { startLine: 0, startCol: 0, endLine, endCol };
   const synthetic = makeDraft(
     makeScopeId({ filePath, range, kind: 'Module' }),
     null,
@@ -310,6 +319,7 @@ function ensureModuleScope(
     range,
     filePath,
   );
+
   scopeDrafts.push(synthetic);
   return synthetic;
 }
