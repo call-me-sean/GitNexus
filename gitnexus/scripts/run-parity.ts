@@ -49,11 +49,16 @@ function runVitest(testFile: string, env: Record<string, string>): { ok: boolean
       env: { ...process.env, ...env },
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 5 * 60 * 1000,
+      // Keep per-invocation timeout well under the CI job timeout (25 min)
+      // so the summary always prints even when a language hangs.
+      timeout: 60 * 1000,
     });
     return { ok: true, output };
   } catch (err: any) {
-    return { ok: false, output: err.stdout ?? err.message ?? String(err) };
+    const stdout = (err.stdout as string) ?? '';
+    const stderr = (err.stderr as string) ?? '';
+    const combined = (stdout + '\n' + stderr).trim() || err.message || String(err);
+    return { ok: false, output: combined };
   }
 }
 
@@ -61,6 +66,11 @@ function runVitest(testFile: string, env: Record<string, string>): { ok: boolean
 const args = process.argv.slice(2);
 const langFlag = args.indexOf('--language');
 const singleLang = langFlag >= 0 ? args[langFlag + 1] : undefined;
+
+if (langFlag >= 0 && singleLang === undefined) {
+  console.error('--language requires a value');
+  process.exit(1);
+}
 
 const languages = singleLang ? [singleLang] : [...MIGRATED_LANGUAGES].map(String);
 

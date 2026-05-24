@@ -63,6 +63,7 @@ const LBUG_NATIVE = [
   'test/integration/search-core.test.ts',
   'test/integration/search-pool.test.ts',
   'test/integration/staleness-and-stability.test.ts',
+  'test/integration/analyze-wal-checkpoint-failure.test.ts',
 ];
 
 // Process spawning and CLI tests — exercise child_process with real
@@ -76,6 +77,8 @@ const SPAWN_CLI = [
   'test/integration/mcp/server-startup.test.ts',
   'test/integration/analyze-heap-oom-e2e.test.ts',
   'test/integration/group/group-cli.test.ts',
+  'test/integration/cli/tool-no-index-stderr.test.ts',
+  'test/integration/setup-skills.test.ts',
 ];
 
 // Worker threads tests — exercise real worker_threads which have
@@ -90,6 +93,9 @@ const WORKER_THREADS = [
 const NATIVE_ADDON_SMOKE = [
   'test/integration/tree-sitter-languages.test.ts',
   'test/integration/parsing.test.ts',
+  'test/integration/pipeline.test.ts',
+  'test/integration/pipeline-graph-golden.test.ts',
+  'test/unit/parser-loader.test.ts',
 ];
 
 // Filesystem behavior tests — exercise operations that vary across
