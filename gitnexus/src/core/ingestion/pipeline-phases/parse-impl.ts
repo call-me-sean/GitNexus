@@ -607,20 +607,31 @@ export async function runChunkedParseAndResolve(
         if (chunkNeedsSynthesis[chunkIdx]) {
           anyChunkNeedsWildcardSynth = true;
         }
-        for (const item of chunkWorkerData.imports) deferredWorkerImports.push(item);
-        for (const item of chunkWorkerData.calls) {
-          // Skip calls for registry-primary languages (PHP, Python, Go, etc.).
-          // These are resolved by the scope-resolution phase, not
-          // processCallsFromExtracted. Accumulating them wastes memory on
-          // large codebases (269K+ objects for 14K PHP files → ~500MB).
-          // See: https://github.com/abhigyanpatwari/GitNexus/issues/1741
-          const itemLang = getLanguageFromFilename(item.filePath);
-          if (itemLang && isRegistryPrimary(itemLang)) continue;
-          deferredWorkerCalls.push(item);
+        const skipFile = new Set<string>();
+        const checkFile = new Set<string>();
+        const shouldAccumulate = (filePath: string): boolean => {
+          if (checkFile.has(filePath)) return true;
+          if (skipFile.has(filePath)) return false;
+          const lang = getLanguageFromFilename(filePath);
+          if (lang !== null && isRegistryPrimary(lang)) {
+            skipFile.add(filePath);
+            return false;
+          }
+          checkFile.add(filePath);
+          return true;
+        };
+        for (const item of chunkWorkerData.imports) {
+          if (shouldAccumulate(item.filePath)) deferredWorkerImports.push(item);
         }
-        for (const item of chunkWorkerData.heritage) deferredWorkerHeritage.push(item);
-        for (const item of chunkWorkerData.constructorBindings)
-          deferredConstructorBindings.push(item);
+        for (const item of chunkWorkerData.calls) {
+          if (shouldAccumulate(item.filePath)) deferredWorkerCalls.push(item);
+        }
+        for (const item of chunkWorkerData.heritage) {
+          if (shouldAccumulate(item.filePath)) deferredWorkerHeritage.push(item);
+        }
+        for (const item of chunkWorkerData.constructorBindings) {
+          if (shouldAccumulate(item.filePath)) deferredConstructorBindings.push(item);
+        }
         // Aggregate worker-produced ParsedFile artifacts so scope-
         // resolution can use them as a re-extraction cache (skips its
         // own tree-sitter re-parse on warm runs).
@@ -628,7 +639,9 @@ export async function runChunkedParseAndResolve(
           for (const item of chunkWorkerData.parsedFiles) allParsedFiles.push(item);
         }
         if (chunkWorkerData.assignments?.length) {
-          for (const item of chunkWorkerData.assignments) deferredAssignments.push(item);
+          for (const item of chunkWorkerData.assignments) {
+            if (shouldAccumulate(item.filePath)) deferredAssignments.push(item);
+          }
         }
 
         if (chunkWorkerData.fileScopeBindings?.length) {
