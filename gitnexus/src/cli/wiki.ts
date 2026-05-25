@@ -56,7 +56,9 @@ function parsePositiveIntegerOption(
   return parsed;
 }
 
-function isLocalProvider(provider: LLMProvider | undefined): provider is 'cursor' | 'claude' | 'codex' {
+function isLocalProvider(
+  provider: LLMProvider | undefined,
+): provider is 'cursor' | 'claude' | 'codex' {
   return provider === 'cursor' || provider === 'claude' || provider === 'codex';
 }
 

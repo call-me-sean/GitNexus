@@ -48,7 +48,9 @@ export function detectLocalCLI(provider: LocalAgentProvider): string | null {
   if (cachedCommands.has(provider)) return cachedCommands.get(provider)?.displayName ?? null;
   const commandInfo = resolveLocalCommand(provider);
   try {
-    execFileSync(commandInfo.command, [...commandInfo.argsPrefix, '--version'], { stdio: 'ignore' });
+    execFileSync(commandInfo.command, [...commandInfo.argsPrefix, '--version'], {
+      stdio: 'ignore',
+    });
     cachedCommands.set(provider, commandInfo);
   } catch {
     cachedCommands.set(provider, null);
@@ -280,10 +282,12 @@ function findWindowsCommand(command: string): string | null {
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],
     });
-    return output
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find(Boolean) ?? null;
+    return (
+      output
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find(Boolean) ?? null
+    );
   } catch {
     return null;
   }
