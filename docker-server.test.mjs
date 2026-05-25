@@ -106,60 +106,128 @@ it('returns 404 when dist/index.html is missing', async () => {
   assert.equal(res.status, 404);
 });
 
-// ── Config injection logic tests (inline, independent of server process) ─────
+// -- Config injection: server-level integration tests ---
 
-import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+function spawnServerWithEnv(cwd, port, env) {
+  const proc = spawn(process.execPath, [serverScript], {
+    cwd,
+    env: { ...process.env, PORT: String(port), ...env },
+    stdio: 'pipe',
+  });
+  proc.on('error', (err) => {
+    throw err;
+  });
+  return proc;
+}
 
-function isValidUrl(value) {
+async function withInjectionServer(envOverrides, fn) {
+  const dir = await mkdtemp(join(tmpdir(), 'gitnexus-inject-'));
+  const distDir = join(dir, 'dist');
+  const assetsDir = join(distDir, 'assets');
+  await mkdir(assetsDir, { recursive: true });
+  await writeFile(
+    join(distDir, 'index.html'),
+    '<!doctype html><html><head><meta charset="utf-8"></head><body>app</body></html>',
+  );
+  await writeFile(join(assetsDir, 'style.abc.css'), 'body{}');
+
+  const port = await getFreePort();
+  const proc = spawnServerWithEnv(dir, port, envOverrides);
   try {
-    const u = new URL(value);
-    return u.protocol === 'http:' || u.protocol === 'https:';
-  } catch {
-    return false;
+    await waitForServer(port);
+    await fn(port);
+  } finally {
+    proc.kill();
+    await rm(dir, { recursive: true, force: true });
   }
 }
 
-function makeInjectedHtml(envBackendUrl) {
-  const rawHtml = '<!doctype html><html><head></head><body></body></html>';
-  const backendUrl = envBackendUrl && isValidUrl(envBackendUrl) ? envBackendUrl : null;
-  const configScript = backendUrl
-    ? `<script>window.__GITNEXUS_CONFIG__=${JSON.stringify({ backendUrl })};</script>`
-    : '';
-  return configScript ? rawHtml.replace('</head>', `${configScript}</head>`) : rawHtml;
-}
-
-it('injects __GITNEXUS_CONFIG__ when GITNEXUS_BACKEND_URL is a valid URL', () => {
-  const html = makeInjectedHtml('http://10.0.0.1:4747');
-  assert.ok(
-    html.includes(
-      '<script>window.__GITNEXUS_CONFIG__={"backendUrl":"http://10.0.0.1:4747"};</script>',
-    ),
-    'Expected config script to be injected into index.html',
-  );
+it('injects __GITNEXUS_CONFIG__ into / when GITNEXUS_BACKEND_URL is valid', async () => {
+  await withInjectionServer({ GITNEXUS_BACKEND_URL: 'http://10.0.0.1:4747' }, async (port) => {
+    const res = await rawGet(port, '/');
+    assert.equal(res.status, 200);
+    assert.ok(
+      res.body.includes('window.__GITNEXUS_CONFIG__'),
+      'Expected __GITNEXUS_CONFIG__ in response body',
+    );
+    assert.ok(res.body.includes('http://10.0.0.1:4747'), 'Expected backend URL in response body');
+  });
 });
 
-it('does not inject when GITNEXUS_BACKEND_URL is not set', () => {
-  const raw = '<!doctype html><html><head></head><body></body></html>';
-  const html = makeInjectedHtml(null);
-  assert.equal(html, raw, 'Expected index.html to be unchanged when no env var is set');
+it('injects __GITNEXUS_CONFIG__ into SPA fallback routes', async () => {
+  await withInjectionServer({ GITNEXUS_BACKEND_URL: 'http://10.0.0.1:4747' }, async (port) => {
+    const res = await rawGet(port, '/some/deep/link');
+    assert.equal(res.status, 200);
+    assert.ok(
+      res.body.includes('window.__GITNEXUS_CONFIG__'),
+      'Expected __GITNEXUS_CONFIG__ in SPA fallback response',
+    );
+    assert.ok(
+      res.body.includes('http://10.0.0.1:4747'),
+      'Expected backend URL in SPA fallback response',
+    );
+  });
 });
 
-it('injects config script before </head>', () => {
-  const html = makeInjectedHtml('http://10.0.0.1:4747');
-  const headCloseIdx = html.indexOf('</head>');
-  const scriptIdx = html.indexOf('<script>window.__GITNEXUS_CONFIG__');
-  assert.ok(scriptIdx !== -1, 'Script tag must be present');
-  assert.ok(scriptIdx < headCloseIdx, 'Script must appear before </head>');
+it('does not inject when GITNEXUS_BACKEND_URL is not set', async () => {
+  await withInjectionServer({}, async (port) => {
+    const res = await rawGet(port, '/');
+    assert.equal(res.status, 200);
+    assert.ok(
+      !res.body.includes('__GITNEXUS_CONFIG__'),
+      'Expected no __GITNEXUS_CONFIG__ when env var is unset',
+    );
+  });
 });
 
-it('does not inject when GITNEXUS_BACKEND_URL is not a valid URL', () => {
-  const raw = '<!doctype html><html><head></head><body></body></html>';
-  const html = makeInjectedHtml('not-a-url');
-  assert.equal(html, raw, 'Expected index.html to be unchanged for an invalid URL');
+it('does not inject when GITNEXUS_BACKEND_URL is invalid', async () => {
+  await withInjectionServer({ GITNEXUS_BACKEND_URL: 'not-a-url' }, async (port) => {
+    const res = await rawGet(port, '/');
+    assert.equal(res.status, 200);
+    assert.ok(
+      !res.body.includes('__GITNEXUS_CONFIG__'),
+      'Expected no __GITNEXUS_CONFIG__ for invalid URL',
+    );
+  });
 });
 
-it('does not inject when GITNEXUS_BACKEND_URL uses a non-http protocol', () => {
-  const raw = '<!doctype html><html><head></head><body></body></html>';
-  const html = makeInjectedHtml('ftp://somehost:21');
-  assert.equal(html, raw, 'Expected index.html to be unchanged for non-http protocol');
+it('does not inject when GITNEXUS_BACKEND_URL uses a non-http protocol', async () => {
+  await withInjectionServer({ GITNEXUS_BACKEND_URL: 'ftp://somehost:21' }, async (port) => {
+    const res = await rawGet(port, '/');
+    assert.equal(res.status, 200);
+    assert.ok(
+      !res.body.includes('__GITNEXUS_CONFIG__'),
+      'Expected no __GITNEXUS_CONFIG__ for non-http protocol',
+    );
+  });
+});
+
+it('escapes </script> in GITNEXUS_BACKEND_URL to prevent XSS', async () => {
+  const xssUrl = 'http://example.com/?x=</script><script>alert(1)</script>';
+  await withInjectionServer({ GITNEXUS_BACKEND_URL: xssUrl }, async (port) => {
+    const res = await rawGet(port, '/');
+    assert.equal(res.status, 200);
+
+    const scriptMatches = res.body.match(/<script>/gi) || [];
+    assert.equal(
+      scriptMatches.length,
+      1,
+      `Expected exactly 1 <script> tag but found ${scriptMatches.length}: XSS breakout detected`,
+    );
+
+    assert.ok(!res.body.includes('alert(1)'), 'Injected alert() must not appear unescaped in HTML');
+    assert.ok(res.body.includes('\\u003c'), 'Angle brackets must be escaped as \\u003c');
+  });
+});
+
+it('does not inject config into static assets', async () => {
+  await withInjectionServer({ GITNEXUS_BACKEND_URL: 'http://10.0.0.1:4747' }, async (port) => {
+    const res = await rawGet(port, '/assets/style.abc.css');
+    assert.equal(res.status, 200);
+    assert.ok(
+      !res.body.includes('__GITNEXUS_CONFIG__'),
+      'Static assets must not contain injected config',
+    );
+    assert.equal(res.body, 'body{}');
+  });
 });

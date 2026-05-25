@@ -16,15 +16,23 @@ function isValidUrl(value) {
   }
 }
 
+function jsonForScriptTag(obj) {
+  return JSON.stringify(obj)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026');
+}
+
 const rawBackendUrl = process.env.GITNEXUS_BACKEND_URL ?? null;
 if (rawBackendUrl && !isValidUrl(rawBackendUrl)) {
+  const safeRaw = rawBackendUrl.replace(/[\r\n]/g, ' ').slice(0, 200);
   console.warn(
-    `[gitnexus-web] GITNEXUS_BACKEND_URL "${rawBackendUrl}" is not a valid http/https URL — ignoring.`,
+    `[gitnexus-web] GITNEXUS_BACKEND_URL "${safeRaw}" is not a valid http/https URL -- ignoring.`,
   );
 }
 const backendUrl = rawBackendUrl && isValidUrl(rawBackendUrl) ? rawBackendUrl : null;
 const configScript = backendUrl
-  ? `<script>window.__GITNEXUS_CONFIG__=${JSON.stringify({ backendUrl })};</script>`
+  ? `<script>window.__GITNEXUS_CONFIG__=${jsonForScriptTag({ backendUrl })};</script>`
   : '';
 
 const contentTypes = {

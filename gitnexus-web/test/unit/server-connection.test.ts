@@ -189,4 +189,10 @@ describe('DEFAULT_BACKEND_URL resolution', () => {
     const { DEFAULT_BACKEND_URL } = await import('../../src/config/ui-constants');
     expect(DEFAULT_BACKEND_URL).toBe('http://localhost:4747');
   });
+
+  it('falls back to localhost:4747 when backendUrl is an empty string', async () => {
+    window.__GITNEXUS_CONFIG__ = { backendUrl: '' };
+    const { DEFAULT_BACKEND_URL } = await import('../../src/config/ui-constants');
+    expect(DEFAULT_BACKEND_URL).toBe('http://localhost:4747');
+  });
 });
