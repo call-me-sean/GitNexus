@@ -342,7 +342,7 @@ export async function startMCPServer(backend: LocalBackend): Promise<void> {
   // killing the server for one missed catch would be worse than logging it.
   process.on('uncaughtException', (err) => {
     process.stderr.write(`GitNexus MCP uncaughtException: ${err?.stack || err}\n`);
-    shutdown(1);
+    void shutdown(1);
   });
   process.on('unhandledRejection', (reason: any) => {
     process.stderr.write(`GitNexus MCP unhandledRejection: ${reason?.stack || reason}\n`);

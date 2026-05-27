@@ -53,8 +53,10 @@ const alreadyAvailable = (message: string): boolean =>
 const resolvePolicyFromEnv = (): ExtensionInstallPolicy => {
   const raw = process.env.GITNEXUS_LBUG_EXTENSION_INSTALL;
   if (raw === 'load-only' || raw === 'never' || raw === 'auto') return raw;
-  return 'auto';
+  return 'load-only';
 };
+
+export const getExtensionInstallPolicy = (): ExtensionInstallPolicy => resolvePolicyFromEnv();
 
 export const getExtensionInstallTimeoutMs = (): number => {
   const raw = process.env.GITNEXUS_LBUG_EXTENSION_INSTALL_TIMEOUT_MS;
@@ -148,7 +150,7 @@ export const installDuckDbExtensionOutOfProcess = async (
  * subsequent analyze or query calls.
  *
  * Policy precedence (most specific wins):
- *   per-call `opts.policy` → constructor `options.policy` → env → `auto`
+ *   per-call `opts.policy` → constructor `options.policy` → env → `load-only`
  */
 export class ExtensionManager {
   private readonly capabilities = new Map<string, ExtensionCapability>();

@@ -52,7 +52,7 @@ const vectorUnavailableMessage =
   'VECTOR extension is unavailable for this LadybugDB runtime; semantic search will use exact scan when embeddings exist.';
 
 const ensureVectorExtensionAvailable = async (): Promise<boolean> => {
-  const vectorReady = await loadVectorExtension();
+  const vectorReady = await loadVectorExtension(undefined, { policy: 'auto' });
   if (!vectorReady) {
     return false;
   }
@@ -584,7 +584,7 @@ export const semanticSearch = async (
     string,
     { distance: number; chunkIndex: number; startLine: number; endLine: number }
   >();
-  if (await loadVectorExtension()) {
+  if (await loadVectorExtension(undefined, { policy: 'auto' })) {
     try {
       bestChunks = await collectBestChunks(k, async (fetchLimit) => {
         const vectorQuery = `
