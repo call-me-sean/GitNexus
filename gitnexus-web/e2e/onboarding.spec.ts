@@ -218,8 +218,8 @@ test.describe('Flow 3: Analyze form', () => {
     // Switch to Local Folder tab
     await page.getByRole('tab', { name: 'Local Folder' }).click();
 
-    // Browse button should be visible
-    await expect(page.getByText('Browse for folder')).toBeVisible();
+    // Browse button should be visible (server-side directory picker)
+    await expect(page.locator('[data-testid="browse-server-dirs"]')).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('local-folder-tab.png') });
   });
 

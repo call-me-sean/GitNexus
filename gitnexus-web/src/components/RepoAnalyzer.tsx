@@ -446,6 +446,7 @@ export const RepoAnalyzer = ({ variant, onComplete, onCancel }: RepoAnalyzerProp
           </div>
           <button
             type="button"
+            data-testid="browse-server-dirs"
             onClick={() => setPickerOpen(true)}
             disabled={isLoading}
             className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-border-subtle bg-elevated px-3 py-2 text-xs font-medium text-text-secondary transition-all duration-150 hover:bg-hover hover:text-text-primary disabled:opacity-50"

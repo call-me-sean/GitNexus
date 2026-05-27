@@ -62,6 +62,7 @@ export const DirectoryPicker = ({ open, onClose, onSelect, initialDir }: Directo
       />
 
       <div
+        data-testid="directory-picker-modal"
         className={`relative mx-4 flex w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-border-subtle bg-surface shadow-2xl transition-all duration-200 ${isVisible ? 'scale-100 opacity-100' : 'scale-95 opacity-0'}`}
         style={{ maxHeight: '70vh' }}
       >
@@ -81,6 +82,7 @@ export const DirectoryPicker = ({ open, onClose, onSelect, initialDir }: Directo
         {/* Breadcrumb */}
         <div className="flex items-center gap-1 overflow-x-auto border-b border-border-subtle bg-elevated/50 px-5 py-2.5">
           <button
+            data-testid="directory-picker-home"
             onClick={() => navigateTo('/')}
             className="shrink-0 rounded p-0.5 text-text-muted transition-colors hover:text-accent"
           >
@@ -104,7 +106,7 @@ export const DirectoryPicker = ({ open, onClose, onSelect, initialDir }: Directo
         </div>
 
         {/* Directory listing */}
-        <div className="min-h-[200px] flex-1 overflow-y-auto px-2 py-2">
+        <div data-testid="directory-listing" className="min-h-[200px] flex-1 overflow-y-auto px-2 py-2">
           {loading && (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-5 w-5 animate-spin text-text-muted" />
@@ -140,6 +142,7 @@ export const DirectoryPicker = ({ open, onClose, onSelect, initialDir }: Directo
               return (
                 <button
                   key={entry.name}
+                  data-testid={`dir-entry-${entry.name}`}
                   onClick={() => navigateTo(target)}
                   className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-colors hover:bg-hover"
                 >
@@ -155,10 +158,11 @@ export const DirectoryPicker = ({ open, onClose, onSelect, initialDir }: Directo
 
         {/* Footer — current path + select button */}
         <div className="flex items-center gap-3 border-t border-border-subtle bg-elevated/30 px-5 py-3">
-          <code className="min-w-0 flex-1 truncate rounded bg-void px-2.5 py-1.5 font-mono text-xs text-text-secondary">
+          <code data-testid="directory-picker-path" className="min-w-0 flex-1 truncate rounded bg-void px-2.5 py-1.5 font-mono text-xs text-text-secondary">
             {currentDir}
           </code>
           <button
+            data-testid="directory-picker-select"
             onClick={() => onSelect(currentDir)}
             className="flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-xs font-medium text-white transition-colors hover:bg-accent/90"
           >
