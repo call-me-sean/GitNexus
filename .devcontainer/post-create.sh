@@ -30,6 +30,22 @@ sudo chown -R node:node \
     /commandhistory
 
 echo "[post-create] 2/7: sync AI CLI credentials + identity from host"
+# Defensive cleanup for users upgrading from an earlier devcontainer
+# design (Option B) where these paths were symlinks into the read-only
+# host stage (e.g. /home/node/.claude/plugins -> /host/.claude/plugins).
+# The current RW-bind topology overlays sub-paths but not the parent
+# symlink itself, so writes to e.g. /home/node/.claude/plugins/known_marketplaces.json
+# would resolve through the stale symlink to a read-only host file and
+# EROFS. Drop the symlinks; mkdir -p below recreates them as real
+# directories in the named volume.
+for p in plugins skills agents memory commands; do
+    [ -L "/home/node/.claude/$p" ] && rm "/home/node/.claude/$p"
+done
+for p in config.toml memories skills; do
+    [ -L "/home/node/.codex/$p" ] && rm "/home/node/.codex/$p"
+done
+mkdir -p /home/node/.claude/plugins
+
 # Plugins, skills, agents, memory, commands, settings.json, $HOME/.claude.json,
 # Codex config.toml/memories/skills are all RW bind-mounted directly from
 # host in devcontainer.json — they live on host and reads/writes go
