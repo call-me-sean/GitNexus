@@ -1,6 +1,6 @@
 # GitNexus Devcontainer
 
-A cross-platform Dev Container that pre-installs Claude Code, OpenAI Codex CLI, and Cursor CLI alongside the GitNexus native build chain. Supported hosts: **macOS, Linux, and Windows 11 via WSL2** (Windows-native is unsupported — the bind mounts require `$HOME` to be set on the host shell, which cmd.exe on Windows-native lacks).
+A cross-platform Dev Container that pre-installs Claude Code, OpenAI Codex CLI, and Cursor CLI alongside the GitNexus native build chain. Supported hosts: **macOS, Linux, Windows 11 (native), and Windows 11 via WSL2.** Windows-native needs a **one-time `HOME` env var setup** — handled automatically by the `initializeCommand` on first run (see [Windows 11 setup](#windows-11-setup)).
 
 ## Quick start
 
@@ -11,11 +11,38 @@ A cross-platform Dev Container that pre-installs Claude Code, OpenAI Codex CLI, 
 5. Wait for the first build (~3–6 minutes) and `postCreateCommand` to finish installing workspace dependencies.
 6. Authenticate the three CLIs once — see [First-time CLI authentication](#first-time-cli-authentication) below.
 
-## Windows 11 — WSL2 is required
+## Windows 11 setup
 
-**Windows-native is unsupported.** The host bind mounts use `${localEnv:HOME}/.claude` (and `.codex`, `.cursor`, `.ssh`, `.config/git`, `.config/gh`, `.gitconfig`). VS Code resolves `${localEnv:HOME}` by reading the host shell's `HOME` env var — and cmd.exe on Windows-native has no `HOME` set. The bind sources then collapse to filesystem-root paths (`/.claude`, `/.codex`, …) and Docker rejects them with `bind source path does not exist`. The `initializeCommand`'s Node script detects this case and fails fast with a pointer at this section instead of letting Docker error opaquely.
+### Windows-native (one-time setup, then "just works")
 
-Beyond the `HOME` resolution issue, WSL2 also gives you reliable file watchers (Vite/jest `--watch` work), 3-5× faster `npm install` IO, and avoids the Docker Desktop Windows bind-mount permission edge cases (e.g., the husky `.husky/_/h` EPERM class).
+The host bind mounts use `${localEnv:HOME}/.claude` (and `.codex`, `.cursor`, `.ssh`, `.config/git`, `.config/gh`, `.gitconfig`). VS Code resolves `${localEnv:HOME}` by reading its own process env, and Windows doesn't set `HOME` by default — it uses `USERPROFILE`. So the bind mounts can't resolve until you tell Windows to also expose your profile as `HOME`.
+
+The `initializeCommand` (`node .devcontainer/ensure-host-config-dirs.cjs`) handles this automatically:
+
+1. **First time you Reopen in Container**, the script detects the missing `HOME`, runs `setx HOME "%USERPROFILE%"` (which writes to your user-level Windows env — no admin needed), prints a one-time setup banner, and exits.
+2. **Close all VS Code windows** (File → Exit) and reopen. VS Code picks up the new `HOME` at startup.
+3. **Reopen in Container again.** The script now sees `HOME=C:\Users\<you>`, skips the setup block, creates the bind-mount source dirs, and Docker brings the container up.
+
+Subsequent rebuilds work normally with no extra steps. The `HOME` env var is set persistently in your Windows user environment, so it'll be there for every future VS Code session (and any other tool that wants `HOME`).
+
+If you'd rather set it manually before opening the container:
+
+```powershell
+setx HOME "%USERPROFILE%"
+# Close & reopen VS Code
+```
+
+### Known trade-offs of Windows-native vs WSL2
+
+Windows-native works, but Docker Desktop's Windows bind-mount layer has rough edges that WSL2 avoids:
+
+- **File watchers can miss events.** Vite / jest `--watch` running inside the container watching workspace files mounted from `D:\...` may miss changes — chokidar polling (`CHOKIDAR_USEPOLLING=true`) is the usual workaround.
+- **`npm install` is 3-5× slower** through the Windows-to-Linux bind-mount translation than on a WSL2-native filesystem.
+- **Permission edge cases.** The husky `.husky/_/h` EPERM class we hit earlier in this PR is specific to Windows-side bind mounts changing UID ownership between container runs. `post-create.sh` clears the cache defensively to keep this from being fatal, but it's still a real source of friction.
+
+If you hit any of those and want to migrate to WSL2 later, the steps are below.
+
+### WSL2 (faster, fewer edge cases)
 
 To clone and open the repo inside WSL2:
 
@@ -187,7 +214,8 @@ Bump `CLAUDE_CODE_VERSION` and `CODEX_VERSION` in `.devcontainer/devcontainer.js
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| `ERROR: GitNexus devcontainer requires WSL2 on Windows 11` from `initializeCommand` | You opened the repo from a Windows-native path; `cmd.exe` has no `$HOME`, so the bind mounts can't resolve | Clone the repo inside WSL2 and reopen — see [Windows 11 — WSL2 is required](#windows-11--wsl2-is-required) |
+| `GitNexus devcontainer one-time Windows setup` banner from `initializeCommand` | First-time Windows-native Reopen-in-Container; `HOME` env var was missing | The script just ran `setx HOME "%USERPROFILE%"` for you. Close ALL VS Code windows (File → Exit) and reopen — see [Windows 11 setup](#windows-11-setup) |
+| `bind source path does not exist: /.claude` (or similar) from Docker | Windows-native `HOME` env var is still missing even after one rebuild — `setx` may have failed or VS Code wasn't fully restarted | Run `setx HOME "%USERPROFILE%"` in a Windows shell manually, fully exit VS Code (check Task Manager that no `Code.exe` remains), reopen |
 | `EACCES` / `EPERM` writing into `~/.claude`, `~/.codex`, or `~/.cursor` inside the container | Stale state from a previous container with a different effective UID | Move the affected dir aside and let the CLI rebuild it (`mv ~/.claude ~/.claude.bak` and log in again). Long-term: WSL2 setup, which doesn't hit this class of issue |
 | `EPERM: operation not permitted, copyfile ... '.husky/_/h'` in `postCreateCommand` | Leftover `.husky/_/` from a previous container run on a Windows-side bind mount | `post-create.sh` already runs `rm -rf .husky/_` defensively. If you hit this on an older config, delete `.husky/_/` on the host and rebuild. Long-term: clone in WSL2 |
 | Vite never hot-reloads | Repo cloned on Windows side, not WSL2 | Re-clone inside WSL2 |
