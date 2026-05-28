@@ -42,30 +42,45 @@
 
   // Mount topology, by group:
   //
-  // 1. CLI config dirs — bind-mounted from the host so the developer's
-  //    existing plugins, skills, agents, memory, settings, and credentials
-  //    for Claude Code / Codex / Cursor + git identity + gh auth are
-  //    immediately available inside the container, and changes inside the
-  //    container flow back to the host. ~/.gitconfig is read-only so
-  //    container-side `git config --global` doesn't leak to host config.
-  //    For high-trust environments where host and container should NOT
-  //    share credentials, swap these three CLI bind mounts for
-  //    per-devcontainer named volumes (Anthropic's reference pattern).
+  // 1. AI CLI host config — read-only bind at /host/.<cli>. `post-create.sh`
+  //    selectively symlinks shareable subdirs (plugins/skills/agents/memory/
+  //    commands) into the container's named-volume config dirs, and copies
+  //    credentials + `.claude.json` (the onboarding-state file Claude Code
+  //    looks for at $HOME, *outside* ~/.claude/) on first run. Read-only
+  //    eliminates write-through from container to host — a compromised npm
+  //    dep can't drop an `agents/evil.md` into your host ~/.claude/agents/
+  //    that the next host Claude session would auto-load. The host stays
+  //    the source of truth for shared content; install new plugins on the
+  //    host and rebuild the container to pick them up.
   //
-  // 2. Per-instance state — `${devcontainerId}` scoped: history and npm
-  //    cache survive container rebuilds but stay isolated between
-  //    sibling devcontainer instances.
+  // 2. AI CLI container config — per-devcontainer named volumes. These are
+  //    what CLAUDE_CONFIG_DIR / CODEX_HOME / ~/.cursor actually point at.
+  //    Credentials live here with proper Linux perms. Container-managed
+  //    state (sessions, history, caches, projects/, settings.json) stays
+  //    isolated per devcontainer, so two GitNexus checkouts on the same
+  //    host don't corrupt each other's chat history or IDE lock files.
   //
-  // 3. Per-workspace-name AND per-instance state — workspace `node_modules`
+  // 3. Other host config — read-write or read-only bind mounts for things
+  //    that don't have the perm-flattening / onboarding-state complexity
+  //    Claude Code does. `~/.gitconfig` is handled separately by VS Code's
+  //    auto-copy mechanism (not mounted).
+  //
+  // 4. Per-instance state — `${devcontainerId}`-scoped: shell history,
+  //    npm cache. Survive rebuilds, isolated between sibling instances.
+  //
+  // 5. Per-workspace-name AND per-instance state — workspace `node_modules`
   //    volumes use both `${localWorkspaceFolderBasename}` (debuggable in
   //    `docker volume ls`) and `${devcontainerId}` (collision-free between
-  //    sibling instances of the same repo, e.g., ~/work/GitNexus vs
-  //    ~/projects/GitNexus). Keeps tree-sitter native binaries and
-  //    onnxruntime off the workspace bind mount (the real Win/Mac perf win).
+  //    sibling instances of the same repo). Keeps tree-sitter native
+  //    binaries and onnxruntime off the workspace bind mount (Win/Mac perf).
   "mounts": [
-    "source=${localEnv:HOME}/.claude,target=/home/node/.claude,type=bind",
-    "source=${localEnv:HOME}/.codex,target=/home/node/.codex,type=bind",
-    "source=${localEnv:HOME}/.cursor,target=/home/node/.cursor,type=bind",
+    "source=${localEnv:HOME}/.claude,target=/host/.claude,type=bind,readonly",
+    "source=${localEnv:HOME}/.codex,target=/host/.codex,type=bind,readonly",
+    "source=${localEnv:HOME}/.cursor,target=/host/.cursor,type=bind,readonly",
+    "source=${localEnv:HOME}/.claude.json,target=/host/.claude.json,type=bind,readonly",
+    "source=claude-config-${devcontainerId},target=/home/node/.claude,type=volume",
+    "source=codex-config-${devcontainerId},target=/home/node/.codex,type=volume",
+    "source=cursor-config-${devcontainerId},target=/home/node/.cursor,type=volume",
     "source=${localEnv:HOME}/.config/git,target=/home/node/.config/git,type=bind,readonly",
     "source=${localEnv:HOME}/.ssh,target=/home/node/.ssh,type=bind,readonly",
     "source=${localEnv:HOME}/.config/gh,target=/home/node/.config/gh,type=bind",
@@ -92,6 +107,7 @@
   // VS Code dotfiles repo (see .devcontainer/README.md).
   "containerEnv": {
     "CLAUDE_CONFIG_DIR": "/home/node/.claude",
+    "CODEX_HOME": "/home/node/.codex",
     "DISABLE_AUTOUPDATER": "1",
     "HISTFILE": "/commandhistory/.zsh_history"
   },

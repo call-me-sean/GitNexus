@@ -76,23 +76,63 @@ Same as macOS — open in VS Code and reopen in container. `updateRemoteUserUID:
 
 ## How CLI state is shared with your host
 
-The following directories inside the container are **bind-mounted directly from your host's `$HOME`**:
+### AI CLIs (Claude Code, Codex, Cursor): read-only host share + per-container credentials
+
+The three AI CLIs use a **hybrid topology** so you get host plugins/skills/memory inside the container without re-installing anything, but each container manages its own credentials with proper Linux permissions:
+
+| Mount | Source | Target | Mode |
+|---|---|---|---|
+| Host Claude state, read-only stage | `$HOME/.claude` | `/host/.claude` | **read-only** bind |
+| Host Codex state, read-only stage | `$HOME/.codex` | `/host/.codex` | **read-only** bind |
+| Host Cursor state, read-only stage | `$HOME/.cursor` | `/host/.cursor` | **read-only** bind |
+| Host onboarding state | `$HOME/.claude.json` | `/host/.claude.json` | **read-only** bind |
+| Container Claude config dir | _named volume_ `claude-config-${devcontainerId}` | `/home/node/.claude` (`CLAUDE_CONFIG_DIR`) | read-write |
+| Container Codex config dir | _named volume_ `codex-config-${devcontainerId}` | `/home/node/.codex` (`CODEX_HOME`) | read-write |
+| Container Cursor config dir | _named volume_ `cursor-config-${devcontainerId}` | `/home/node/.cursor` | read-write |
+
+`post-create.sh` populates the named volumes on first run:
+
+- **Symlinks shared subdirs from the read-only host stage** into the container's config volume, so installing a plugin on the host shows up in the container after a rebuild. The shared list:
+  - **Claude**: `plugins/`, `skills/`, `agents/`, `memory/`, `commands/` — your user-installed surface
+  - **Codex**: `config.toml` — your user prefs
+  - **Cursor**: nothing shared (cli-config.json conflates auth + settings, no shareable subdirs)
+- **Copies these to the container's config volume on first run** (not symlinks — so the container can refresh / rewrite them without touching host):
+  - `.credentials.json` (Claude), `auth.json` (Codex), `cli-config.json` (Cursor) — credentials
+  - `.claude.json` — Claude Code's onboarding-state file. **This file lives at `$HOME/.claude.json`, NOT inside `~/.claude/`** — without it, Claude Code fires the onboarding wizard (theme picker → trust dialog → login) every fresh container, even when valid credentials are present. Copied with a `{"hasCompletedOnboarding":true,"installMethod":"global"}` stub fallback for hosts that haven't run Claude Code yet.
+
+**Why read-only stage + named volume instead of a single host bind mount:**
+
+- **No host filesystem write-through.** A compromised npm package inside the container can't drop `plugins/evil/` or `agents/evil.md` into your host config — the read-only mount blocks the write. Without this, the container is a code-execution escape vector that persists after teardown (next host Claude session would auto-load the malicious agent).
+- **Proper credential perms.** Docker Desktop's Windows bind mount surfaces every host file as `root:root` mode `777`. Named-volume files inside the container come with proper Linux ownership and `chmod 600` for credentials — what Claude Code, Codex, and Cursor expect.
+- **Skips host/container lock-file and ghost-project collisions.** We deliberately do NOT symlink `~/.claude/ide/` (per-process IDE lock files would collide between host and container Claude Code instances), `~/.claude/projects/` (host encodes workspace as `D--development-coding-GitNexus`, container as `-workspace` — symlinking creates two ghost project trees with split memory), or `~/.claude/settings.json` (container is pinned, host floats — bidirectional writes cause silent schema drift).
+
+**What this means for your workflow:**
+
+- Install a plugin on the **host** → rebuild container → it's inside the container.
+- Install a plugin **inside the container** → it lives only in that container's named volume; the host is unaffected. Re-install on host if you want it there too.
+- `claude logout` inside the container clears the container's named-volume credentials; the host's `.credentials.json` is untouched.
+- OAuth refresh-token divergence is real: Anthropic rotates refresh tokens on every use, so if the host refreshes after the container's first-run copy, the container's snapshot eventually goes stale (silent 401). Re-run `claude login` inside the container if you hit this — usually weeks apart.
+
+### Other host bind mounts
 
 | Container path | Host source | Mode | Why |
 |---|---|---|---|
-| `~/.claude` | `$HOME/.claude` | read-write | Claude Code plugins, skills, agents, memory, settings, OAuth |
-| `~/.codex` | `$HOME/.codex` | read-write | Codex CLI auth + config + profiles |
-| `~/.cursor` | `$HOME/.cursor` | read-write | Cursor CLI auth + rules + cli-config |
 | `~/.config/git` | `$HOME/.config/git` | **read-only** | XDG-style git config / ignore / attributes |
 | `~/.ssh` | `$HOME/.ssh` | **read-only** | SSH commit signing + git push over SSH |
 | `~/.config/gh` | `$HOME/.config/gh` | read-write | `gh` CLI auth (PR create, issue create, checks) |
-| `~/.docker` | `$HOME/.docker` | read-write | Container registry auth (`docker push` to ghcr/dockerhub if you add docker-in-docker) + buildx config |
+| `~/.docker` | `$HOME/.docker` | read-write | Container registry auth + buildx config (inert until you add Docker CLI via a Feature) |
 | `~/.aws` | `$HOME/.aws` | **read-only** | AWS CLI / SDK credentials (forward-compat — empty by default) |
 | `~/.azure` | `$HOME/.azure` | **read-only** | Azure CLI credentials (forward-compat — empty by default) |
 
 `~/.gitconfig` is **not** bind-mounted — VS Code's Dev Containers extension auto-copies the host's gitconfig into the container at attach time (this is built-in behavior, not something this devcontainer configures). The bind-mount approach conflicts with that auto-copy mechanism, so we let VS Code own it. The end result is the same: your host's `user.name` / `user.email` are available inside the container.
 
-If a host source dir doesn't exist when the container is first created, the `initializeCommand` (`node .devcontainer/ensure-host-config-dirs.cjs`) creates it empty — so the bind mount always has a valid source, and the cloud configs you don't use yet are ready when you do.
+If a host source dir doesn't exist when the container is first created, the `initializeCommand` (`node .devcontainer/ensure-host-config-dirs.cjs`) creates it empty — so the bind mount always has a valid source.
+
+### Per-CLI quirks worth knowing
+
+- **Claude Code on macOS** stores credentials in the system Keychain, not in `~/.claude/.credentials.json`. The copy-on-first-run silently no-ops; run `claude login` inside the container once.
+- **Codex on macOS / Linux with `cli_auth_credentials_store = "keyring"`** stores auth in the OS keyring (Keychain / Secret Service), so `~/.codex/auth.json` may not exist. Same fallback: `codex login --device-auth` inside the container.
+- **Cursor CLI inside containers** has [known upstream auth issues](https://forum.cursor.com/t/cursor-agent-authentication-issue-inside-docker/143995) — even with a correctly-copied `cli-config.json`, you may need to re-run `cursor-agent login` inside the container.
 
 ### What you still don't have inside the container
 
@@ -115,16 +155,19 @@ The bind mount source directories are guaranteed to exist by the `initializeComm
 
 ### Trust boundary, concretely
 
-Host and container share a single trust boundary by design — fine for personal-dev, but the consequence is concrete. Any malicious npm package or `postinstall` script in the workspace dep tree, running inside the container with these bind mounts active, has direct read access to:
+Host and container share a single trust boundary by design — fine for personal-dev, but the consequence is concrete. Any malicious npm package or `postinstall` script in the workspace dep tree, running inside the container, has direct **read** access to:
 
-- OAuth refresh tokens for **Claude Code, Codex, Cursor** (under `~/.claude`, `~/.codex`, `~/.cursor`)
+- **Host AI CLI state** at `/host/.claude`, `/host/.codex`, `/host/.cursor` (mounted read-only) — including `.credentials.json`, `auth.json`, `cli-config.json`, plugins, skills, agents, memory store
+- The **container's own credential snapshots** at `/home/node/.claude/.credentials.json` etc. (copied from host on first run)
+- `~/.claude/projects/<workspace>/memory/MEMORY.md` (which may contain user-stored secrets if you've used the `/remember` skill)
 - Your **`gh` token** (`~/.config/gh`)
 - Your **SSH private keys** (`~/.ssh/`)
-- Docker registry tokens in **`~/.docker/config.json`** (registry passwords/PATs for ghcr / dockerhub if you've `docker login`-ed)
+- Docker registry tokens in **`~/.docker/config.json`** (if you've `docker login`-ed)
 - AWS/Azure CLI credentials if you've populated `~/.aws/` or `~/.azure/`
-- `~/.claude/projects/<workspace>/memory/MEMORY.md` (which may contain user-stored secrets if you've used the `/remember` skill)
 
-Read-only mounts on `~/.ssh`, `~/.config/git`, `~/.aws`, and `~/.azure` prevent container code from modifying or deleting them, but they're still readable. The egress firewall is deferred (see "What's not included (yet)" below) so a compromised package would also have unrestricted network to exfiltrate.
+What this design **does** prevent (vs. a full bidirectional bind mount): a malicious dep cannot **write back** to your host `~/.claude/plugins/`, `~/.claude/agents/`, or `~/.claude/skills/`. The read-only `/host` mount blocks the write. That matters because a host write-through would mean a single in-container compromise persists across container teardown — your next host Claude session would auto-load the malicious agent. Read-only mounts on `~/.ssh`, `~/.config/git`, `~/.aws`, `~/.azure` give the same one-way property for those credentials.
+
+The egress firewall is deferred (see "What's not included (yet)" below) so a compromised package would still have unrestricted network to exfiltrate what it can read.
 
 **If a workspace dep is ever found compromised**, rotate credentials at the vendor side — local file deletion is insufficient because tokens may have already left:
 

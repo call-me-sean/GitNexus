@@ -99,3 +99,15 @@ for (const dir of [
   fs.mkdirSync(path.join(home, dir), { recursive: true });
 }
 
+// Claude Code reads onboarding state (`hasCompletedOnboarding`, `userID`,
+// per-project trust) from `~/.claude.json` — a FILE at $HOME, separate
+// from the `~/.claude/` directory. devcontainer.json bind-mounts this
+// read-only at /host/.claude.json so post-create.sh can seed the
+// container's `~/.claude.json` and skip the onboarding wizard. Make sure
+// the file exists on the host first (Docker rejects bind mounts with a
+// missing source).
+const claudeJson = path.join(home, ".claude.json");
+if (!fs.existsSync(claudeJson)) {
+  fs.closeSync(fs.openSync(claudeJson, "a"));
+}
+
