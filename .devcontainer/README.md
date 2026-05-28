@@ -43,9 +43,23 @@ Open the repo folder in VS Code → **Reopen in Container**. The image is multi-
 
 Same as macOS — open in VS Code and reopen in container. `updateRemoteUserUID: true` (default) shifts the container's `node` user UID/GID to match your host user, so bind-mounted files stay writable without extra setup.
 
+## How CLI state is shared with your host
+
+`~/.claude`, `~/.codex`, and `~/.cursor` inside the container are **bind-mounted directly from your host's `$HOME`**. That means:
+
+- **Authentication is shared.** If you're already logged in on the host (`claude login`, `codex login`, `cursor-agent login`), you're already logged in inside the container. No second login step.
+- **Plugins, skills, agents, memory, and settings sync both ways.** Install a plugin from inside the container and it shows up on the host; add a custom agent on the host and the container sees it immediately. The auto-memory store at `~/.claude/projects/<workspace>/memory/` is the same file tree from both sides.
+- **No per-workspace duplication.** All your devcontainers across all your projects see the same `.claude`/`.codex`/`.cursor` content, just like all your host shells do.
+
+The bind mount source paths are guaranteed to exist by `.devcontainer/ensure-host-config-dirs.cjs`, which `initializeCommand` runs on the host before the container is created.
+
+For a high-trust enterprise environment where you don't want container code to be able to touch host credentials, replace the three `type=bind` entries for `.claude`/`.codex`/`.cursor` in `.devcontainer/devcontainer.json` with `type=volume` named volumes (Anthropic's reference pattern). Most personal-dev setups don't need that isolation — host and container share the same trust boundary.
+
 ## First-time CLI authentication
 
-**Interactive login is the default for all three CLIs.** Credentials persist in per-workspace named volumes scoped by `${devcontainerId}`, so you authenticate once per project — subsequent rebuilds reuse the stored credentials.
+If you already use these CLIs on the host, **skip this section** — your existing logins are already in scope inside the container.
+
+If a CLI is brand-new on this host, log in from inside _or_ outside the container; either populates the shared `~/.<cli>` directory.
 
 ### Claude Code
 
@@ -53,7 +67,7 @@ Same as macOS — open in VS Code and reopen in container. `updateRemoteUserUID:
 claude login
 ```
 
-Opens a browser auth flow. VS Code's port forwarding handles the OAuth callback automatically. After auth, `~/.claude/` is populated in the named volume and persists across rebuilds. The `DISABLE_AUTOUPDATER=1` env var prevents the running CLI from updating itself — rebuild the container to pick up a newer Claude Code.
+Opens a browser auth flow. VS Code's port forwarding handles the OAuth callback automatically. After auth, `~/.claude/` is populated and visible from both host and container. The `DISABLE_AUTOUPDATER=1` env var prevents the in-container CLI from auto-updating — rebuild the container to pick up a newer Claude Code.
 
 ### OpenAI Codex CLI
 
@@ -61,7 +75,7 @@ Opens a browser auth flow. VS Code's port forwarding handles the OAuth callback 
 codex login --device-auth
 ```
 
-The device-code flow prints a URL and a one-time code. Visit the URL on your host browser, paste the code, and the CLI authenticates without needing a callback listener — this is the most reliable path inside containers. Credentials persist in `~/.codex/auth.json` inside the named volume.
+The device-code flow prints a URL and a one-time code. Visit the URL on your host browser, paste the code, and the CLI authenticates without needing a callback listener — this is the most reliable path inside containers. Credentials land in `~/.codex/auth.json` (shared with host).
 
 `codex login` (browser-callback variant) also works but can be flaky in some headless contexts; prefer `--device-auth`.
 
@@ -71,7 +85,7 @@ The device-code flow prints a URL and a one-time code. Visit the URL on your hos
 cursor-agent login
 ```
 
-Opens a browser auth flow; VS Code's port forwarding handles the callback. After auth, credentials persist in `~/.cursor/cli-config.json` inside the named volume.
+Opens a browser auth flow; VS Code's port forwarding handles the callback. Credentials persist in `~/.cursor/cli-config.json` (shared with host).
 
 Verify any time with `cursor-agent status`.
 
@@ -146,7 +160,7 @@ Three build args control pinned versions:
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| `EACCES` on first `claude login` / `codex login` / `cursor-agent login` | Named volume mount got a stale state | `docker volume rm` the relevant `*-config-<devcontainerId>` volume and rebuild |
+| `EACCES` / `EPERM` writing into `~/.claude`, `~/.codex`, or `~/.cursor` inside the container | Windows-side bind-mount permission translation got out of sync after a UID change between rebuilds | On the host, ensure your user owns the directory tree; if it's truly stuck, move the affected dir aside and let the CLI rebuild it (`mv ~/.claude ~/.claude.bak` and log in again). Long-term: clone in WSL2 — bind-mount permission classes don't apply to WSL-side filesystems |
 | `EPERM: operation not permitted, copyfile ... '.husky/_/h'` in `postCreateCommand` | Leftover `.husky/_/` from a previous container run; Docker Desktop's Windows bind mount won't let the new container's `node` user overwrite it. `postCreateCommand` already runs `rm -rf .husky/_` defensively, but if you hit it on an older config, delete `.husky/_/` on the host (`rm -rf .husky/_`) and rebuild | Long-term: clone the repo inside WSL2 (see [Windows 11 WSL2 setup](#windows-11-primary-host--wsl2-setup)) — WSL-side filesystems don't have this bind-mount class of issue |
 | Vite never hot-reloads on Windows | Repo cloned on Windows side, not WSL2 | Re-clone inside WSL2 (see [WSL2 setup](#windows-11-primary-host--wsl2-setup)) |
 | `gitnexus-web` can't reach the backend | `4747` was remapped or backend isn't running | Verify the Ports panel shows `4747` forwarded with no remap; start the backend with `cd gitnexus && npx gitnexus serve` |

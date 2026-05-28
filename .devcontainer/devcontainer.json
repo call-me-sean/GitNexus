@@ -18,6 +18,12 @@
     }
   },
 
+  // Runs on the HOST before the container is created. Ensures the bind
+  // mount sources (~/.claude, ~/.codex, ~/.cursor) exist so Docker doesn't
+  // reject the mount when a CLI has never been used on this host. Safe
+  // re-run; idempotent. See ensure-host-config-dirs.cjs.
+  "initializeCommand": "node .devcontainer/ensure-host-config-dirs.cjs",
+
   // Anthropic's official Claude Code Feature pulls the latest stable at
   // build time; DISABLE_AUTOUPDATER below locks it inside the running
   // container so rebuild is the only way the version changes.
@@ -32,14 +38,25 @@
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
   "workspaceFolder": "/workspace",
 
-  // Named volumes scoped per-devcontainer keep auth tokens, history, and
-  // node_modules persistent across rebuilds without leaking between
-  // workspaces. Sub-workspace node_modules volumes keep tree-sitter native
-  // binaries and onnxruntime off the bind mount (the real Win/Mac perf win).
+  // CLI config dirs are bind-mounted from the host so the developer's
+  // existing plugins, skills, agents, memory, settings, and credentials
+  // for Claude Code / Codex / Cursor are immediately available inside the
+  // container, and changes inside the container flow back to the host.
+  // The `initializeCommand` above guarantees these source paths exist on
+  // first up so Docker never errors out on a missing bind source. Anthropic
+  // recommends per-devcontainer named volumes instead in enterprise /
+  // high-trust environments; for personal dev where the host + container
+  // share the same trust boundary, bind mounts give the better daily-driver
+  // experience.
+  //
+  // Shell history, npm cache, and node_modules stay in named volumes
+  // scoped per-workspace — history doesn't need to escape the workspace,
+  // node_modules belong off the bind mount for Win/Mac perf, and the npm
+  // cache wants the container-native FS.
   "mounts": [
-    "source=claude-config-${devcontainerId},target=/home/node/.claude,type=volume",
-    "source=codex-config-${devcontainerId},target=/home/node/.codex,type=volume",
-    "source=cursor-config-${devcontainerId},target=/home/node/.cursor,type=volume",
+    "source=${localEnv:HOME}/.claude,target=/home/node/.claude,type=bind",
+    "source=${localEnv:HOME}/.codex,target=/home/node/.codex,type=bind",
+    "source=${localEnv:HOME}/.cursor,target=/home/node/.cursor,type=bind",
     "source=commandhistory-${devcontainerId},target=/commandhistory,type=volume",
     "source=npm-cache-${devcontainerId},target=/home/node/.npm,type=volume",
     "source=${localWorkspaceFolderBasename}-root-node-modules,target=/workspace/node_modules,type=volume",
