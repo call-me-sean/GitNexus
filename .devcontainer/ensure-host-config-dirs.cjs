@@ -87,6 +87,9 @@ for (const dir of [
   ".codex",
   ".cursor",
   ".ssh",
+  ".docker",
+  ".aws",
+  ".azure",
   path.join(".config", "gh"),
   path.join(".config", "git"),
 ]) {

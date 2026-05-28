@@ -78,16 +78,29 @@ Same as macOS — open in VS Code and reopen in container. `updateRemoteUserUID:
 
 The following directories inside the container are **bind-mounted directly from your host's `$HOME`**:
 
-| Container path | Host source | Mode |
-|---|---|---|
-| `~/.claude` | `$HOME/.claude` | read-write |
-| `~/.codex` | `$HOME/.codex` | read-write |
-| `~/.cursor` | `$HOME/.cursor` | read-write |
-| `~/.config/git` | `$HOME/.config/git` | **read-only** |
-| `~/.ssh` | `$HOME/.ssh` | **read-only** |
-| `~/.config/gh` | `$HOME/.config/gh` | read-write |
+| Container path | Host source | Mode | Why |
+|---|---|---|---|
+| `~/.claude` | `$HOME/.claude` | read-write | Claude Code plugins, skills, agents, memory, settings, OAuth |
+| `~/.codex` | `$HOME/.codex` | read-write | Codex CLI auth + config + profiles |
+| `~/.cursor` | `$HOME/.cursor` | read-write | Cursor CLI auth + rules + cli-config |
+| `~/.config/git` | `$HOME/.config/git` | **read-only** | XDG-style git config / ignore / attributes |
+| `~/.ssh` | `$HOME/.ssh` | **read-only** | SSH commit signing + git push over SSH |
+| `~/.config/gh` | `$HOME/.config/gh` | read-write | `gh` CLI auth (PR create, issue create, checks) |
+| `~/.docker` | `$HOME/.docker` | read-write | Container registry auth (`docker push` to ghcr/dockerhub if you add docker-in-docker) + buildx config |
+| `~/.aws` | `$HOME/.aws` | **read-only** | AWS CLI / SDK credentials (forward-compat — empty by default) |
+| `~/.azure` | `$HOME/.azure` | **read-only** | Azure CLI credentials (forward-compat — empty by default) |
 
 `~/.gitconfig` is **not** bind-mounted — VS Code's Dev Containers extension auto-copies the host's gitconfig into the container at attach time (this is built-in behavior, not something this devcontainer configures). The bind-mount approach conflicts with that auto-copy mechanism, so we let VS Code own it. The end result is the same: your host's `user.name` / `user.email` are available inside the container.
+
+If a host source dir doesn't exist when the container is first created, the `initializeCommand` (`node .devcontainer/ensure-host-config-dirs.cjs`) creates it empty — so the bind mount always has a valid source, and the cloud configs you don't use yet are ready when you do.
+
+### What you still don't have inside the container
+
+These are commonly-needed CLIs that aren't installed by default — adding them would be follow-up work, not in this PR's scope:
+
+- **Docker CLI** (for `docker push` / `docker build` from inside the container). Add via `ghcr.io/devcontainers/features/docker-outside-of-docker:1` to the `features` block — `~/.docker/` is already mounted so `docker login` state from your host will work immediately.
+- **AWS CLI / Azure CLI / gcloud / kubectl** — same pattern: add the matching Feature, the host config dirs already flow through.
+- **Private npm registry auth** (`~/.npmrc`) — you don't have a global one on this host. If you ever start using private packages, add `source=${localEnv:HOME}/.npmrc,target=/home/node/.npmrc,type=bind,readonly` to the mounts.
 
 That means:
 
@@ -102,7 +115,16 @@ The bind mount source directories are guaranteed to exist by the `initializeComm
 
 ### Trust boundary, concretely
 
-Host and container share a single trust boundary by design — fine for personal-dev, but the consequence is concrete: any malicious npm package or `postinstall` script in the workspace dep tree, running inside the container with these bind mounts active, has direct read access to your OAuth refresh tokens for all three CLIs, your `gh` token, **your SSH private keys under `~/.ssh/`**, and `~/.claude/projects/<workspace>/memory/MEMORY.md` (which may contain user-stored secrets if you've used the `/remember` skill). Read-only mounts on `~/.ssh`, `~/.gitconfig`, and `~/.config/git` prevent container code from modifying or deleting them, but they're still readable. The egress firewall is deferred (see "What's not included (yet)" below) so a compromised package would also have unrestricted network to exfiltrate.
+Host and container share a single trust boundary by design — fine for personal-dev, but the consequence is concrete. Any malicious npm package or `postinstall` script in the workspace dep tree, running inside the container with these bind mounts active, has direct read access to:
+
+- OAuth refresh tokens for **Claude Code, Codex, Cursor** (under `~/.claude`, `~/.codex`, `~/.cursor`)
+- Your **`gh` token** (`~/.config/gh`)
+- Your **SSH private keys** (`~/.ssh/`)
+- Docker registry tokens in **`~/.docker/config.json`** (registry passwords/PATs for ghcr / dockerhub if you've `docker login`-ed)
+- AWS/Azure CLI credentials if you've populated `~/.aws/` or `~/.azure/`
+- `~/.claude/projects/<workspace>/memory/MEMORY.md` (which may contain user-stored secrets if you've used the `/remember` skill)
+
+Read-only mounts on `~/.ssh`, `~/.config/git`, `~/.aws`, and `~/.azure` prevent container code from modifying or deleting them, but they're still readable. The egress firewall is deferred (see "What's not included (yet)" below) so a compromised package would also have unrestricted network to exfiltrate.
 
 **If a workspace dep is ever found compromised**, rotate credentials at the vendor side — local file deletion is insufficient because tokens may have already left:
 
