@@ -45,7 +45,7 @@ Same as macOS — open in VS Code and reopen in container. `updateRemoteUserUID:
 
 ## First-time CLI authentication
 
-Each CLI persists its config in a per-devcontainer named volume scoped by `${devcontainerId}`, so authentication survives container rebuilds. You only need to log in once per workspace.
+**Interactive login is the default for all three CLIs.** Credentials persist in per-workspace named volumes scoped by `${devcontainerId}`, so you authenticate once per project — subsequent rebuilds reuse the stored credentials.
 
 ### Claude Code
 
@@ -53,37 +53,50 @@ Each CLI persists its config in a per-devcontainer named volume scoped by `${dev
 claude login
 ```
 
-This opens a browser auth flow; VS Code's port forwarding handles the callback. After auth, `~/.claude/` is populated in the named volume and persists across rebuilds. The `DISABLE_AUTOUPDATER=1` env var prevents the running CLI from updating itself — rebuild the container to pick up a newer Claude Code.
+Opens a browser auth flow. VS Code's port forwarding handles the OAuth callback automatically. After auth, `~/.claude/` is populated in the named volume and persists across rebuilds. The `DISABLE_AUTOUPDATER=1` env var prevents the running CLI from updating itself — rebuild the container to pick up a newer Claude Code.
 
 ### OpenAI Codex CLI
-
-The browser-callback flow can be flaky inside containers; the device-code flow is more reliable:
 
 ```bash
 codex login --device-auth
 ```
 
-Visit the URL it prints on your host browser and paste the displayed code. After auth, `~/.codex/auth.json` persists in the named volume.
+The device-code flow prints a URL and a one-time code. Visit the URL on your host browser, paste the code, and the CLI authenticates without needing a callback listener — this is the most reliable path inside containers. Credentials persist in `~/.codex/auth.json` inside the named volume.
 
-For CI/headless use: set `OPENAI_API_KEY` in your host shell before opening the devcontainer — VS Code's `${localEnv:OPENAI_API_KEY}` would resolve it, but it's currently not wired into `containerEnv`. If you need this, add it to `.devcontainer/devcontainer.json` and rebuild.
+`codex login` (browser-callback variant) also works but can be flaky in some headless contexts; prefer `--device-auth`.
 
 ### Cursor CLI
-
-Preferred path is the `CURSOR_API_KEY` environment variable:
-
-1. Generate an API key from the Cursor dashboard → Integrations.
-2. Set it on the host shell that launches VS Code: `export CURSOR_API_KEY=...` (or set in your shell rc / Windows env vars).
-3. **Rebuild the container** — `containerEnv` resolves `${localEnv:CURSOR_API_KEY}` at container-create time, so a new key only lands after a rebuild.
-
-Verify with `cursor-agent status` inside the container.
-
-If you'd rather log in interactively:
 
 ```bash
 cursor-agent login
 ```
 
-This opens a browser flow and stores credentials under `~/.cursor/` in the named volume.
+Opens a browser auth flow; VS Code's port forwarding handles the callback. After auth, credentials persist in `~/.cursor/cli-config.json` inside the named volume.
+
+Verify any time with `cursor-agent status`.
+
+## Alternative: API key authentication (CI / headless)
+
+For non-interactive use (CI runners, automated scripts), all three CLIs accept API keys via env vars:
+
+| CLI | Env var | Where to get the key |
+|---|---|---|
+| Claude Code | `ANTHROPIC_API_KEY` | <https://console.anthropic.com/settings/keys> |
+| Codex | `OPENAI_API_KEY` | <https://platform.openai.com/api-keys> |
+| Cursor | `CURSOR_API_KEY` | Cursor dashboard → Integrations |
+
+These env vars are intentionally **not** injected into the container from the host. `${localEnv:VAR}` resolves an unset host variable to an empty string, and some CLIs (Cursor in particular) treat a set-but-empty key as "use this key" rather than "fall back to stored login" — which would silently break the login flow for everyone who hasn't pre-set the host var.
+
+To use an API key inside the container, export it in your terminal session:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+# or OPENAI_API_KEY, or CURSOR_API_KEY
+```
+
+For persistence across container shells, carry the export via your VS Code [dotfiles repository](https://code.visualstudio.com/docs/devcontainers/containers#_personalizing-with-dotfile-repositories). VS Code clones the dotfiles repo into the container on attach and runs your install command, so the export lands in `~/.bashrc` / `~/.zshrc` per your own setup — and your API keys stay out of this repo's committed `devcontainer.json`.
+
+A non-empty API key env var takes precedence over stored login credentials for each CLI.
 
 ## Port forwarding
 
@@ -138,4 +151,4 @@ Three build args control pinned versions:
 | `gitnexus-web` can't reach the backend | `4747` was remapped or backend isn't running | Verify the Ports panel shows `4747` forwarded with no remap; start the backend with `cd gitnexus && npx gitnexus serve` |
 | `npm install` fails on tree-sitter-swift / proto / dart | Native build toolchain missing | This shouldn't happen in the devcontainer — verify the apt layer installed `python3 make g++`. If iterating, set `GITNEXUS_SKIP_OPTIONAL_GRAMMARS=1` to skip the vendored grammars |
 | Integration tests fail with `database busy` | LadybugDB single-writer constraint | Don't run host-side `gitnexus analyze` while the container is also analyzing the same repo; choose one writer |
-| `CURSOR_API_KEY` set on host but not visible in container | Host env not propagated, or container started before key was set | Rebuild the container after setting the host env var |
+| API key env vars not visible inside the container | They are intentionally not auto-propagated from the host (so an empty/stale host var can't silently break `*-login` for everyone else) | `export ANTHROPIC_API_KEY=...` / `OPENAI_API_KEY=...` / `CURSOR_API_KEY=...` inside the container shell, or carry it via your VS Code [dotfiles repo](https://code.visualstudio.com/docs/devcontainers/containers#_personalizing-with-dotfile-repositories) for persistence |

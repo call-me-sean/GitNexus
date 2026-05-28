@@ -48,13 +48,18 @@
     "source=${localWorkspaceFolderBasename}-gitnexus-shared-node-modules,target=/workspace/gitnexus-shared/node_modules,type=volume"
   ],
 
-  // CURSOR_API_KEY resolves at container-create time from the host shell
-  // that opened VS Code (empty fallback triggers interactive cursor-agent
-  // login). Set CURSOR_API_KEY on the host and rebuild to inject a new key.
+  // Interactive login is the default auth path for all three CLIs;
+  // credentials persist in the per-devcontainer named volumes mounted above.
+  // API keys (ANTHROPIC_API_KEY / OPENAI_API_KEY / CURSOR_API_KEY) are NOT
+  // injected via containerEnv — `${localEnv:VAR}` resolves an unset host var
+  // to an empty string, and Cursor in particular treats `CURSOR_API_KEY=""`
+  // as "use this empty key" rather than "fall back to stored login", which
+  // would silently break `cursor-agent login`. Users who need API key auth
+  // should `export` the var in their container shell or carry it via their
+  // VS Code dotfiles repo (see .devcontainer/README.md).
   "containerEnv": {
     "CLAUDE_CONFIG_DIR": "/home/node/.claude",
     "DISABLE_AUTOUPDATER": "1",
-    "CURSOR_API_KEY": "${localEnv:CURSOR_API_KEY}",
     "HISTFILE": "/commandhistory/.zsh_history"
   },
 
