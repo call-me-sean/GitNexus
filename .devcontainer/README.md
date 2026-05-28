@@ -76,44 +76,46 @@ Same as macOS — open in VS Code and reopen in container. `updateRemoteUserUID:
 
 ## How CLI state is shared with your host
 
-### AI CLIs (Claude Code, Codex, Cursor): read-only host share + per-container credentials
+### AI CLIs (Claude Code, Codex, Cursor): direct RW bind for shareable content + per-container credentials
 
-The three AI CLIs use a **hybrid topology** so you get host plugins/skills/memory inside the container without re-installing anything, but each container manages its own credentials with proper Linux permissions:
+The three AI CLIs use a **hybrid mount topology**: shareable subdirs/files (plugins, skills, agents, memory, commands, settings) are RW bind-mounted from host so reads AND writes go bidirectionally; credentials + identity stay in per-container named volumes so logging in/out in the container doesn't affect the host. Bind mounts at sub-paths override the named volume's content at those paths (Docker mount precedence — more specific path wins).
 
-| Mount | Source | Target | Mode |
-|---|---|---|---|
-| Host Claude state, read-only stage | `$HOME/.claude` | `/host/.claude` | **read-only** bind |
-| Host Codex state, read-only stage | `$HOME/.codex` | `/host/.codex` | **read-only** bind |
-| Host Cursor state, read-only stage | `$HOME/.cursor` | `/host/.cursor` | **read-only** bind |
-| Host onboarding state | `$HOME/.claude.json` | `/host/.claude.json` | **read-only** bind |
-| Container Claude config dir | _named volume_ `claude-config-${devcontainerId}` | `/home/node/.claude` (`CLAUDE_CONFIG_DIR`) | read-write |
-| Container Codex config dir | _named volume_ `codex-config-${devcontainerId}` | `/home/node/.codex` (`CODEX_HOME`) | read-write |
-| Container Cursor config dir | _named volume_ `cursor-config-${devcontainerId}` | `/home/node/.cursor` | read-write |
+| Mount | Source | Target | Mode | Purpose |
+|---|---|---|---|---|
+| Container Claude config dir | _named volume_ `claude-config-${devcontainerId}` | `/home/node/.claude` | rw | Per-container credentials + identity |
+| Container Codex config dir | _named volume_ `codex-config-${devcontainerId}` | `/home/node/.codex` | rw | Per-container credentials |
+| Container Cursor config dir | _named volume_ `cursor-config-${devcontainerId}` | `/home/node/.cursor` | rw | Per-container credentials |
+| Host Claude state, read-only stage | `$HOME/.claude` | `/host/.claude` | **read-only** | `post-create.sh` reads credentials + identity from here on container-create |
+| Host Codex state, read-only stage | `$HOME/.codex` | `/host/.codex` | **read-only** | Same purpose for Codex |
+| Host Cursor state, read-only stage | `$HOME/.cursor` | `/host/.cursor` | **read-only** | Same purpose for Cursor |
+| **Claude shareable subdirs** (overlay on the volume) | `$HOME/.claude/{plugins,skills,agents,memory,commands}` | `/home/node/.claude/{plugins,skills,agents,memory,commands}` | rw | **Bidirectional** — install plugin on host or in container, both sides see it |
+| **Claude shareable files** (overlay on the volume) | `$HOME/.claude/settings.json`, `$HOME/.claude.json` | `/home/node/.claude/settings.json`, `/home/node/.claude.json` | rw | Theme, enabled plugins, MCP user-scope, `hasCompletedOnboarding`, project trust — all shared |
+| **Codex shareable** | `$HOME/.codex/{config.toml,memories,skills}` | `/home/node/.codex/{config.toml,memories,skills}` | rw | Symmetric with Claude's shareable surface |
 
-`post-create.sh` populates the named volumes on **every container-create** (rebuild — not container start):
+**What gets shared bidirectionally (RW bind from host):**
 
-- **Symlinks shared subdirs from the read-only host stage** into the container's config volume, so installing a plugin on the host shows up in the container after a rebuild. The shared list:
-  - **Claude**: `plugins/`, `skills/`, `agents/`, `memory/`, `commands/` — your user-installed surface
-  - **Codex**: `config.toml`, `memories/`, `skills/` — your prefs + user-installed surface (symmetric with Claude)
-  - **Cursor**: nothing shared via symlink (Cursor's `cli-config.json` conflates auth + settings; no separate plugin surface)
-- **Syncs these from host into the container's config volume** (not symlinks — container can refresh/rewrite freely, host stays untouched). Sync is "always overwrite if host has the file, otherwise leave container alone", so logging in on host populates the container on next rebuild, and logging in only inside the container keeps that login (host has no source to overwrite from):
-  - `.credentials.json` (Claude), `auth.json` (Codex), `cli-config.json` (Cursor) — credentials
-  - **Two Claude state files**: `$HOME/.claude.json` (carries `hasCompletedOnboarding`, MCP user-scope config, project trust, `tipsHistory`) **and** `~/.claude/.claude.json` (carries `userID`, `oauthAccount`, migration tracking). Both files get synced. We deliberately leave `CLAUDE_CONFIG_DIR` unset (Claude's default `~/.claude` matches the named-volume mount target) so Claude reads onboarding state from `$HOME/.claude.json` — which is where `hasCompletedOnboarding` lives. With `CLAUDE_CONFIG_DIR` set, Claude would instead read the small identity-only file and re-onboard every container. Stub fallback `{"hasCompletedOnboarding":true,"installMethod":"global"}` written to `$HOME/.claude.json` only if the host had neither file.
-  - **`settings.json`** (Claude) — theme, `enabledPlugins`, and `extraKnownMarketplaces`. Without this synced, theme picker fires on every fresh volume and host-installed plugins stay disabled even though their files are symlinked in. We pin Claude Code via `CLAUDE_CODE_VERSION`, so version drift between host (floating) and container (pinned) is bounded — Claude tolerates unknown keys, and we re-sync on every container-create anyway.
+- **Claude**: `plugins/`, `skills/`, `agents/`, `memory/`, `commands/` (the user-installed surface), `settings.json` (theme + `enabledPlugins` + `extraKnownMarketplaces`), `$HOME/.claude.json` (`hasCompletedOnboarding` + MCP user-scope + per-project trust + activity counters)
+- **Codex**: `config.toml` (prefs), `memories/` + `skills/` (user-installed surface)
+- **Cursor**: nothing structural (Cursor doesn't expose plugin/skill/agent dirs — `cli-config.json` conflates auth+settings and stays per-container)
 
-**Why read-only stage + named volume instead of a single host bind mount:**
+Install a plugin on the host or inside the container — both sides see it immediately. Run `/plugin marketplace add` from inside the container and it lands in your host `~/.claude/plugins/marketplaces/`. Save a memory via the `/remember` skill from either side and it persists to the same host file.
 
-- **No host filesystem write-through.** A compromised npm package inside the container can't drop `plugins/evil/` or `agents/evil.md` into your host config — the read-only mount blocks the write. Without this, the container is a code-execution escape vector that persists after teardown (next host Claude session would auto-load the malicious agent).
-- **Proper credential perms.** Docker Desktop's Windows bind mount surfaces every host file as `root:root` mode `777`. Named-volume files inside the container come with proper Linux ownership and `chmod 600` for credentials — what Claude Code, Codex, and Cursor expect.
-- **Skips host/container lock-file and ghost-project collisions.** We deliberately do NOT symlink `~/.claude/ide/` (per-process IDE lock files would collide between host and container Claude Code instances), `~/.claude/projects/` (host encodes workspace as `D--development-coding-GitNexus`, container as `-workspace` — symlinking creates two ghost project trees with split memory), or `~/.claude/settings.json` (container is pinned, host floats — bidirectional writes cause silent schema drift).
+**What stays per-container (in the named volume) and is synced from host on container-create:**
 
-**What this means for your workflow:**
+- `.credentials.json` (Claude OAuth tokens), `auth.json` (Codex), `cli-config.json` (Cursor) — credentials
+- `~/.claude/.claude.json` (Claude's identity-only file: `userID`, `oauthAccount`, migration tracking) — kept per-container so logging in via container doesn't overwrite host's stored identity
 
-- Install a plugin on the **host** → rebuild container → it's inside the container.
-- Install a plugin **inside the container** → it lives only in that container's named volume; the host is unaffected. Re-install on host if you want it there too.
-- **Log in on host OR inside the container — both work.** Logging in on host populates the matching file (`.credentials.json` / `auth.json` / `cli-config.json`) under your `$HOME/.<cli>/`, which the next container-create syncs in. Logging in only inside the container writes to the named volume, which persists across rebuilds (the host has nothing to sync over the top of). The named volume is keyed by `${devcontainerId}` — stable for a given workspace folder path, so the in-container login survives ordinary rebuilds.
-- `claude logout` inside the container clears the named volume's credentials; the host's `.credentials.json` is untouched. Next container-create re-syncs from host if host is logged in.
-- **Refresh-token divergence between rebuilds.** Container's credentials match host's at container-create time; after that, container manages its own refresh until the next rebuild. Anthropic rotates refresh tokens on every use, so an unattended container that hasn't talked to the API in weeks can hit a silent 401 if the host has refreshed since. Re-run `claude login` inside the container, or rebuild, to recover.
+`post-create.sh` runs on every container-create, copies host's credentials into the volume if present, then container manages refresh from there. Sync is "always overwrite if host has the file, otherwise leave container alone". So:
+
+- Host has credentials → container starts logged in.
+- Host has no credentials → `claude login` / `codex login --device-auth` / `cursor-agent login` inside container; credentials stay in the named volume across rebuilds (volume is keyed by `${devcontainerId}`, stable for the workspace path).
+- `claude logout` inside container clears volume credentials only; host is untouched.
+
+**Why CLAUDE_CONFIG_DIR is intentionally NOT set:** Claude's default `~/.claude` matches the named-volume mount target, so the env var added no behavior — but setting it changed which file Claude reads `hasCompletedOnboarding` from. With it set, Claude reads `$CLAUDE_CONFIG_DIR/.claude.json` (the small identity-only file) and re-onboards every container; without it, Claude reads `$HOME/.claude.json` (now bind-mounted from host, with `hasCompletedOnboarding: true`).
+
+**Trade-off accepted: write-through to host CLI config.** A compromised npm package in the workspace dep tree, running inside the container, can write to `~/.claude/plugins/`, `~/.claude/agents/`, `~/.claude/memory/`, etc. on host. The next host Claude session would auto-load whatever it dropped. This is the explicit cost of the bidirectional RW bind. The alternative (read-only stage + symlinks) made `/plugin marketplace add` inside the container fail with EROFS — unacceptable. Credentials stay in the per-container named volume, so an attacker has to compromise the OAuth-bearing file specifically in container to get them; the volume isn't shared back to host.
+
+**Refresh-token divergence between rebuilds.** Container's credentials match host's at container-create time; after that, container manages its own refresh until the next rebuild. Anthropic rotates refresh tokens on every use, so an unattended container that hasn't talked to the API in weeks can hit a silent 401 if the host has refreshed since. Re-run `claude login` inside the container, or rebuild, to recover.
 
 ### Other host bind mounts
 

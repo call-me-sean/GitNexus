@@ -29,59 +29,27 @@ sudo chown -R node:node \
     /home/node/.cursor \
     /commandhistory
 
-echo "[post-create] 2/7: stage AI CLI config (read-only host share + per-container credentials)"
-# Host's ~/.claude / ~/.codex / ~/.cursor are bind-mounted READ-ONLY at
-# /host/.<cli>. The container's actual config dirs are per-devcontainer
-# named volumes at /home/node/.<cli>. We selectively SYMLINK shareable
-# subdirs (plugins, skills, agents, memory, commands) from /host into the
-# named volume so installing a plugin on the host lets the container see
-# it on next rebuild. Read-only mount means container code can't write
-# back — a compromised npm dep can't drop a malicious agent / skill /
-# plugin into the host config that the next host Claude session would
-# autoload. We deliberately do NOT symlink `ide/` (lock-file PID
-# collisions across host/container Claude Code instances), `projects/`
-# (host and container encode the workspace path differently — host
-# `D--development-coding-GitNexus` vs container `-workspace` — and
-# bidirectional writes split memory across two ghost project dirs), or
-# `settings.json` (container CLI is version-pinned while host floats;
-# bidirectional writes cause silent schema drift). Those stay container-
-# local in the named volume.
+echo "[post-create] 2/7: sync AI CLI credentials + identity from host"
+# Plugins, skills, agents, memory, commands, settings.json, $HOME/.claude.json,
+# Codex config.toml/memories/skills are all RW bind-mounted directly from
+# host in devcontainer.json — they live on host and reads/writes go
+# bidirectionally. Nothing for this script to do for those.
 #
-# CREDENTIALS (.credentials.json / auth.json / cli-config.json) and
-# `.claude.json` (the onboarding-state file at $HOME) are COPIED on
-# first run, not symlinked. The container then manages its own refresh
-# in the named volume; the host's copies are untouched. Refresh-token
-# divergence is real (Anthropic rotates on every use), so an unattended
-# container session can hit a silent 401 if the host has refreshed since
-# the copy — re-run `claude login` inside the container to refresh.
-
-link_readonly_share() {
-    local src_root=$1
-    local dst_root=$2
-    shift 2
-    for name in "$@"; do
-        # If dst exists as a non-symlink (stale from a prior run), remove
-        # it first so the symlink can land. Skips if dst is already the
-        # right symlink.
-        if [ -e "$src_root/$name" ]; then
-            if [ -L "$dst_root/$name" ]; then
-                continue  # already a symlink — leave alone
-            fi
-            rm -rf "$dst_root/$name"
-            ln -s "$src_root/$name" "$dst_root/$name"
-        fi
-    done
-}
+# What stays per-container (in the named volume) and gets SYNCED from
+# host on container-create:
+#   - .credentials.json (Claude OAuth tokens)
+#   - .claude/.claude.json (Claude identity: userID, oauthAccount,
+#     migration tracking — different file from $HOME/.claude.json)
+#   - auth.json (Codex)
+#   - cli-config.json (Cursor — conflates auth + settings)
+#
+# Sync semantics: ALWAYS overwrite from host on container-create, so a
+# fresh container starts logged in as host's user (if host had creds).
+# Container manages its own refresh from there until next rebuild.
+# Logging out in container doesn't affect host. Per-container login is
+# the design goal; bind-mounting these would make logout shared.
 
 sync_from_host() {
-    # ALWAYS overwrite from host on container-create, so a fresh container
-    # starts in the same auth/trust state as the host. Guarding on
-    # "[ ! -e $dst ]" was a bug: stale named volumes left over from earlier
-    # builds (or from a previous container instance that wrote interim
-    # state) made the guard return false and skip the copy, leaving the
-    # container desynced from the host. Container can still mutate the
-    # files after this point — divergence is reset only on container
-    # rebuild (which is when `post-create.sh` runs).
     local src=$1
     local dst=$2
     local mode=${3:-600}
@@ -92,57 +60,21 @@ sync_from_host() {
     fi
 }
 
-# Claude Code — share the user-installed surface (plugins/skills/agents/
-# memory/commands) read-only from host. Skip ide/projects per above.
-link_readonly_share /host/.claude /home/node/.claude \
-    plugins skills agents memory commands
-
-# State files. Claude splits state across two files: $HOME/.claude.json
-# (hasCompletedOnboarding, MCP user-scope config, project trust,
-# tipsHistory) and $CLAUDE_CONFIG_DIR/.claude.json (userID, oauthAccount,
-# migration tracking). With CLAUDE_CONFIG_DIR unset (see devcontainer.json
-# rationale), Claude reads onboarding state from $HOME/.claude.json —
-# which carries `hasCompletedOnboarding` and skips the wizard.
-sync_from_host /host/.claude.json /home/node/.claude.json 644
-sync_from_host /host/.claude/.claude.json /home/node/.claude/.claude.json 644
-
-# settings.json carries the active theme, enabled plugins, and known
-# marketplaces — without this, theme picker fires on every fresh volume
-# and host-installed plugins stay disabled even though their files are
-# symlinked in by link_readonly_share above. We pin Claude Code version
-# in devcontainer.json, so schema drift between host (floating) and
-# container (pinned) is bounded — Claude tolerates unknown keys, and
-# we re-sync on every container-create.
-sync_from_host /host/.claude/settings.json /home/node/.claude/settings.json 644
-
-# Stub fallback at $HOME/.claude.json for first-time hosts that never
-# ran Claude Code (host file is empty or missing — `sync_from_host`
-# leaves the container's path missing too).
-if [ ! -f /home/node/.claude.json ]; then
-    echo '{"hasCompletedOnboarding":true,"installMethod":"global"}' \
-        > /home/node/.claude.json
-    chmod 644 /home/node/.claude.json
-fi
-
-# Credentials. Container manages its own refresh until next rebuild.
 sync_from_host \
     /host/.claude/.credentials.json /home/node/.claude/.credentials.json
+sync_from_host \
+    /host/.claude/.claude.json /home/node/.claude/.claude.json 644
 
-# Codex — share config.toml + memories/ + skills/ (the user-installed
-# surface, symmetric with Claude's plugin/skill/agent sharing). Sync
-# auth.json on container-create. Hosts using OS keyring storage
+# Codex auth. Hosts using OS keyring storage
 # (`cli_auth_credentials_store = "keyring"`, default on macOS) have no
 # auth.json on disk — the copy silently no-ops and
 # `codex login --device-auth` inside the container is the path.
-link_readonly_share /host/.codex /home/node/.codex \
-    config.toml memories skills
 sync_from_host \
     /host/.codex/auth.json /home/node/.codex/auth.json
 
-# Cursor CLI — cli-config.json conflates auth + settings, no shareable
-# subdirs. Copy on container create. Cursor has known upstream issues
-# authenticating inside Docker even with correctly-copied config; if
-# `cursor-agent` reports auth errors after copy, re-run
+# Cursor CLI — cli-config.json conflates auth + settings. Cursor has known
+# upstream issues authenticating inside Docker even with correctly-copied
+# config; if `cursor-agent` reports auth errors after copy, re-run
 # `cursor-agent login` inside the container.
 sync_from_host \
     /host/.cursor/cli-config.json /home/node/.cursor/cli-config.json

@@ -82,9 +82,23 @@ if (process.platform === "win32" && !process.env.HOME) {
 
 const home = os.homedir();
 
-for (const dir of [
+// Directory bind-mount sources. devcontainer.json declares RW binds for
+// shareable subdirs (plugins/skills/agents/memory/commands for Claude;
+// memories/skills for Codex) so reads/writes go directly host<->container.
+// Docker rejects bind mounts whose source doesn't exist — mkdir -p each
+// one. Per-CLI directories themselves (~/.claude, ~/.codex, ~/.cursor)
+// are also created for the /host/.<cli> read-only stage mounts that
+// post-create.sh reads credentials from.
+const dirs = [
   ".claude",
+  path.join(".claude", "plugins"),
+  path.join(".claude", "skills"),
+  path.join(".claude", "agents"),
+  path.join(".claude", "memory"),
+  path.join(".claude", "commands"),
   ".codex",
+  path.join(".codex", "memories"),
+  path.join(".codex", "skills"),
   ".cursor",
   ".ssh",
   ".docker",
@@ -92,22 +106,29 @@ for (const dir of [
   ".azure",
   path.join(".config", "gh"),
   path.join(".config", "git"),
-]) {
+];
+for (const dir of dirs) {
   if (fs.existsSync(path.join(home, dir))) {
     continue;
   }
   fs.mkdirSync(path.join(home, dir), { recursive: true });
 }
 
-// Claude Code reads onboarding state (`hasCompletedOnboarding`, `userID`,
-// per-project trust) from `~/.claude.json` — a FILE at $HOME, separate
-// from the `~/.claude/` directory. devcontainer.json bind-mounts this
-// read-only at /host/.claude.json so post-create.sh can seed the
-// container's `~/.claude.json` and skip the onboarding wizard. Make sure
-// the file exists on the host first (Docker rejects bind mounts with a
-// missing source).
-const claudeJson = path.join(home, ".claude.json");
-if (!fs.existsSync(claudeJson)) {
-  fs.closeSync(fs.openSync(claudeJson, "a"));
+// File bind-mount sources. devcontainer.json bind-mounts each file
+// individually (so the host file IS the container file — bidirectional
+// share). Touch-empty if absent so Docker doesn't reject the mount.
+// `~/.claude.json` carries `hasCompletedOnboarding` + MCP user-scope +
+// per-project trust; `~/.claude/settings.json` carries theme + enabled
+// plugins; `~/.codex/config.toml` carries Codex user prefs.
+const files = [
+  ".claude.json",
+  path.join(".claude", "settings.json"),
+  path.join(".codex", "config.toml"),
+];
+for (const file of files) {
+  const fullPath = path.join(home, file);
+  if (!fs.existsSync(fullPath)) {
+    fs.closeSync(fs.openSync(fullPath, "a"));
+  }
 }
 

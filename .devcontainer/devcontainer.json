@@ -74,13 +74,42 @@
   //    sibling instances of the same repo). Keeps tree-sitter native
   //    binaries and onnxruntime off the workspace bind mount (Win/Mac perf).
   "mounts": [
-    "source=${localEnv:HOME}/.claude,target=/host/.claude,type=bind,readonly",
-    "source=${localEnv:HOME}/.codex,target=/host/.codex,type=bind,readonly",
-    "source=${localEnv:HOME}/.cursor,target=/host/.cursor,type=bind,readonly",
-    "source=${localEnv:HOME}/.claude.json,target=/host/.claude.json,type=bind,readonly",
+    // Per-container named volumes for credentials + identity state. Each
+    // CLI's actual `~/.<cli>` config dir lives in a volume so credentials
+    // (with proper Linux 600 perms) and per-container session state stay
+    // isolated from the host. Login in container vs login on host =
+    // independent. Bind mounts BELOW these volumes override the volume's
+    // contents at the bound sub-paths — Docker mount precedence: more
+    // specific path wins.
     "source=claude-config-${devcontainerId},target=/home/node/.claude,type=volume",
     "source=codex-config-${devcontainerId},target=/home/node/.codex,type=volume",
     "source=cursor-config-${devcontainerId},target=/home/node/.cursor,type=volume",
+
+    // Read-only host stage for post-create.sh to copy credentials +
+    // identity from on container-create. Kept read-only so a container
+    // process can't write back to host CLI state files (the write-through
+    // attack vector). Only the credential/identity files are READ here;
+    // shareable content is bind-mounted directly RW below, not staged.
+    "source=${localEnv:HOME}/.claude,target=/host/.claude,type=bind,readonly",
+    "source=${localEnv:HOME}/.codex,target=/host/.codex,type=bind,readonly",
+    "source=${localEnv:HOME}/.cursor,target=/host/.cursor,type=bind,readonly",
+
+    // Direct RW bind mounts for shareable subdirs + files. These OVERLAY
+    // the named volume at their target paths, so reads/writes from inside
+    // the container go straight to host. `/plugin marketplace add` in
+    // container = installed on host. New skill on host = visible in
+    // container next read. Trade-off accepted: a compromised npm dep can
+    // write into host plugin/skill/agent/memory/command dirs.
+    "source=${localEnv:HOME}/.claude/plugins,target=/home/node/.claude/plugins,type=bind",
+    "source=${localEnv:HOME}/.claude/skills,target=/home/node/.claude/skills,type=bind",
+    "source=${localEnv:HOME}/.claude/agents,target=/home/node/.claude/agents,type=bind",
+    "source=${localEnv:HOME}/.claude/memory,target=/home/node/.claude/memory,type=bind",
+    "source=${localEnv:HOME}/.claude/commands,target=/home/node/.claude/commands,type=bind",
+    "source=${localEnv:HOME}/.claude/settings.json,target=/home/node/.claude/settings.json,type=bind",
+    "source=${localEnv:HOME}/.claude.json,target=/home/node/.claude.json,type=bind",
+    "source=${localEnv:HOME}/.codex/config.toml,target=/home/node/.codex/config.toml,type=bind",
+    "source=${localEnv:HOME}/.codex/memories,target=/home/node/.codex/memories,type=bind",
+    "source=${localEnv:HOME}/.codex/skills,target=/home/node/.codex/skills,type=bind",
     "source=${localEnv:HOME}/.config/git,target=/home/node/.config/git,type=bind,readonly",
     "source=${localEnv:HOME}/.ssh,target=/home/node/.ssh,type=bind,readonly",
     "source=${localEnv:HOME}/.config/gh,target=/home/node/.config/gh,type=bind",
