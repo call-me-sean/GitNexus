@@ -90,15 +90,15 @@ The three AI CLIs use a **hybrid topology** so you get host plugins/skills/memor
 | Container Codex config dir | _named volume_ `codex-config-${devcontainerId}` | `/home/node/.codex` (`CODEX_HOME`) | read-write |
 | Container Cursor config dir | _named volume_ `cursor-config-${devcontainerId}` | `/home/node/.cursor` | read-write |
 
-`post-create.sh` populates the named volumes on first run:
+`post-create.sh` populates the named volumes on **every container-create** (rebuild — not container start):
 
 - **Symlinks shared subdirs from the read-only host stage** into the container's config volume, so installing a plugin on the host shows up in the container after a rebuild. The shared list:
   - **Claude**: `plugins/`, `skills/`, `agents/`, `memory/`, `commands/` — your user-installed surface
   - **Codex**: `config.toml` — your user prefs
   - **Cursor**: nothing shared (cli-config.json conflates auth + settings, no shareable subdirs)
-- **Copies these to the container's config volume on first run** (not symlinks — so the container can refresh / rewrite them without touching host):
+- **Syncs these from host into the container's config volume** (not symlinks — container can refresh/rewrite freely, host stays untouched). Sync is "always overwrite if host has the file, otherwise leave container alone", so logging in on host populates the container on next rebuild, and logging in only inside the container keeps that login (host has no source to overwrite from):
   - `.credentials.json` (Claude), `auth.json` (Codex), `cli-config.json` (Cursor) — credentials
-  - `.claude.json` — Claude Code's onboarding-state file. **This file lives at `$HOME/.claude.json`, NOT inside `~/.claude/`** — without it, Claude Code fires the onboarding wizard (theme picker → trust dialog → login) every fresh container, even when valid credentials are present. Copied with a `{"hasCompletedOnboarding":true,"installMethod":"global"}` stub fallback for hosts that haven't run Claude Code yet.
+  - **Two Claude state files**: `$HOME/.claude.json` (carries `hasCompletedOnboarding`, `userID`, `oauthAccount`, per-project trust state, MCP user-scope config) **and** `$CLAUDE_CONFIG_DIR/.claude.json` (carries migration tracking, the same `userID`, per-project trust). Both must agree on `userID` or Claude Code re-onboards; the sync covers both. Stub fallback `{"hasCompletedOnboarding":true,"installMethod":"global"}` written to `$HOME/.claude.json` only if the host had neither file.
 
 **Why read-only stage + named volume instead of a single host bind mount:**
 
@@ -110,8 +110,9 @@ The three AI CLIs use a **hybrid topology** so you get host plugins/skills/memor
 
 - Install a plugin on the **host** → rebuild container → it's inside the container.
 - Install a plugin **inside the container** → it lives only in that container's named volume; the host is unaffected. Re-install on host if you want it there too.
-- `claude logout` inside the container clears the container's named-volume credentials; the host's `.credentials.json` is untouched.
-- OAuth refresh-token divergence is real: Anthropic rotates refresh tokens on every use, so if the host refreshes after the container's first-run copy, the container's snapshot eventually goes stale (silent 401). Re-run `claude login` inside the container if you hit this — usually weeks apart.
+- **Log in on host OR inside the container — both work.** Logging in on host populates the matching file (`.credentials.json` / `auth.json` / `cli-config.json`) under your `$HOME/.<cli>/`, which the next container-create syncs in. Logging in only inside the container writes to the named volume, which persists across rebuilds (the host has nothing to sync over the top of). The named volume is keyed by `${devcontainerId}` — stable for a given workspace folder path, so the in-container login survives ordinary rebuilds.
+- `claude logout` inside the container clears the named volume's credentials; the host's `.credentials.json` is untouched. Next container-create re-syncs from host if host is logged in.
+- **Refresh-token divergence between rebuilds.** Container's credentials match host's at container-create time; after that, container manages its own refresh until the next rebuild. Anthropic rotates refresh tokens on every use, so an unattended container that hasn't talked to the API in weeks can hit a silent 401 if the host has refreshed since. Re-run `claude login` inside the container, or rebuild, to recover.
 
 ### Other host bind mounts
 
@@ -130,9 +131,10 @@ If a host source dir doesn't exist when the container is first created, the `ini
 
 ### Per-CLI quirks worth knowing
 
-- **Claude Code on macOS** stores credentials in the system Keychain, not in `~/.claude/.credentials.json`. The copy-on-first-run silently no-ops; run `claude login` inside the container once.
-- **Codex on macOS / Linux with `cli_auth_credentials_store = "keyring"`** stores auth in the OS keyring (Keychain / Secret Service), so `~/.codex/auth.json` may not exist. Same fallback: `codex login --device-auth` inside the container.
-- **Cursor CLI inside containers** has [known upstream auth issues](https://forum.cursor.com/t/cursor-agent-authentication-issue-inside-docker/143995) — even with a correctly-copied `cli-config.json`, you may need to re-run `cursor-agent login` inside the container.
+- **Claude Code on macOS** stores credentials in the system Keychain, not in `~/.claude/.credentials.json`. The sync silently no-ops; run `claude login` inside the container once and the named volume persists it.
+- **Codex on macOS / Linux with `cli_auth_credentials_store = "keyring"`** stores auth in the OS keyring (Keychain / Secret Service), so `~/.codex/auth.json` may not exist on host. Same fallback: `codex login --device-auth` inside the container.
+- **Cursor CLI inside containers** has [known upstream auth issues](https://forum.cursor.com/t/cursor-agent-authentication-issue-inside-docker/143995) — even with a correctly-synced `cli-config.json`, you may need to re-run `cursor-agent login` inside the container.
+- **Stale named volumes from old rebuilds can carry forward.** If you delete and re-create the same workspace, or if a prior container left interim state with a different `userID`, deleting the named volumes before rebuild guarantees a clean sync: `docker volume rm claude-config-${devcontainerId} codex-config-${devcontainerId} cursor-config-${devcontainerId}` (look them up with `docker volume ls | grep -config-`).
 
 ### What you still don't have inside the container
 
@@ -180,9 +182,12 @@ For high-trust enterprise environments where host and container should NOT share
 
 ## First-time CLI authentication
 
-If you already use these CLIs on the host, **skip this section** — your existing logins are already in scope inside the container.
+Each CLI works either way:
 
-If a CLI is brand-new on this host, log in from inside _or_ outside the container; either populates the shared `~/.<cli>` directory.
+- **Log in on host first** → the container picks it up automatically on the next rebuild (`sync_from_host` copies the credential file into the named volume during `post-create.sh`). Host stays the source of truth.
+- **Log in inside the container** → credentials write to the named volume. They persist across ordinary rebuilds (volume is keyed by `${devcontainerId}`, which is stable for a given workspace folder). The host's credentials are untouched.
+
+You can mix and match per-CLI. A common setup is "Claude logged in on host, Codex/Cursor logged in inside container".
 
 ### Claude Code
 
