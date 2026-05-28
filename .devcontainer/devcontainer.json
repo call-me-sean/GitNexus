@@ -107,7 +107,10 @@
   },
 
   // Sequential setup: chown the workspace-side node_modules volumes (Docker
-  // creates them root-owned), then install in dependency order
-  // (gitnexus-shared must build before its consumers).
-  "postCreateCommand": "sudo chown -R node:node /workspace/node_modules /workspace/gitnexus/node_modules /workspace/gitnexus-web/node_modules /workspace/gitnexus-shared/node_modules && cd /workspace && npm install && cd /workspace/gitnexus-shared && npm install && npm run build && cd /workspace/gitnexus && npm install && cd /workspace/gitnexus-web && npm install"
+  // creates them root-owned), then install in dependency order:
+  // root (husky) → gitnexus-shared (install + build, consumed via file:..)
+  // → gitnexus-web (must install BEFORE gitnexus, because gitnexus's
+  // `prepare` script runs scripts/build.js which compiles gitnexus-web)
+  // → gitnexus (last; its prepare hook needs gitnexus-web's node_modules).
+  "postCreateCommand": "sudo chown -R node:node /workspace/node_modules /workspace/gitnexus/node_modules /workspace/gitnexus-web/node_modules /workspace/gitnexus-shared/node_modules && cd /workspace && npm install && cd /workspace/gitnexus-shared && npm install && npm run build && cd /workspace/gitnexus-web && npm install && cd /workspace/gitnexus && npm install"
 }
