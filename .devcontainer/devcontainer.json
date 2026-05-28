@@ -208,9 +208,18 @@
     }
   },
 
-  // Driver script with labeled steps lives at .devcontainer/post-create.sh
-  // so each step's success/failure is visible in the log without parsing
-  // an &&-chain. Run via `bash` explicitly so the script doesn't depend
-  // on its executable bit surviving the workspace bind mount.
+  // Lifecycle split (per Dev Container spec):
+  // - `updateContentCommand` runs on container-create AND whenever
+  //   workspace content changes (e.g. lockfile updates). It owns
+  //   workspace dependency installation — re-installing on every
+  //   container-create wastes time when nothing changed, but it must
+  //   re-run when deps shift.
+  // - `postCreateCommand` runs once on container-create. It owns AI CLI
+  //   credential + identity sync from the host — work that should
+  //   happen exactly once per container instance, not on every content
+  //   update.
+  // Run both via explicit `bash` so they don't depend on the script's
+  // executable bit surviving the workspace bind mount.
+  "updateContentCommand": "bash .devcontainer/install-deps.sh",
   "postCreateCommand": "bash .devcontainer/post-create.sh"
 }

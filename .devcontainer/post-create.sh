@@ -1,35 +1,27 @@
 #!/usr/bin/env bash
 # Devcontainer postCreate driver. Runs once after the container is created
-# (per devcontainer.json `postCreateCommand`). Each labeled step is its own
-# command, so a failure log line names the step that failed instead of an
-# opaque `&&`-chain index.
+# (per devcontainer.json `postCreateCommand`). Workspace dependency
+# installation lives in install-deps.sh (`updateContentCommand`) which
+# runs BEFORE this script — see the spec lifecycle. This script only
+# handles AI CLI credential + identity sync from the host.
 
 set -euo pipefail
 
-cd /workspace
-
-echo "[post-create] 1/7: chown workspace node_modules + named-volume mount points"
-# `updateRemoteUserUID: true` realigns the `node` user's UID/GID at runtime
-# on Linux hosts (no-op on Mac/Windows where Docker Desktop translates UIDs
-# via its VM layer). The Dockerfile chown at build time targets the original
-# UID; empty named volumes created at first mount inherit that ownership and
-# end up owned by the stale UID after realignment. Re-chown here, post-
-# realignment, so npm install can write to ~/.npm, the AI CLIs can write
-# to their config dirs, and zsh history writes to /commandhistory succeed
-# on hosts with non-1000 UIDs.
+echo "[post-create] 1/2: chown AI CLI named-volume mount points"
+# Named volumes (~/.claude, ~/.codex, ~/.cursor, /commandhistory,
+# ~/.local) inherit ownership from the image's pre-realignment UID at
+# first mount. After `updateRemoteUserUID: true` shifts the `node` user,
+# these end up owned by the stale UID — writes inside the volume fail.
+# install-deps.sh handles the workspace-side chown; this script handles
+# the AI CLI side so each lifecycle hook owns its own concern.
 sudo chown -R node:node \
-    /workspace/node_modules \
-    /workspace/gitnexus/node_modules \
-    /workspace/gitnexus-web/node_modules \
-    /workspace/gitnexus-shared/node_modules \
-    /home/node/.npm \
-    /home/node/.local \
     /home/node/.claude \
     /home/node/.codex \
     /home/node/.cursor \
+    /home/node/.local \
     /commandhistory
 
-echo "[post-create] 2/7: sync AI CLI credentials + identity from host"
+echo "[post-create] 2/2: sync AI CLI credentials + identity from host"
 # Defensive cleanup for users upgrading from an earlier devcontainer
 # design (Option B) where these paths were symlinks into the read-only
 # host stage (e.g. /home/node/.claude/plugins -> /host/.claude/plugins).
@@ -152,35 +144,5 @@ sync_from_host \
 # `cursor-agent login` inside the container.
 sync_from_host \
     /host/.cursor/cli-config.json /home/node/.cursor/cli-config.json
-
-echo "[post-create] 3/7: clear stale .husky/_ runtime cache"
-# Docker Desktop's Windows bind-mount permission translation refuses to let
-# the new container's `node` user overwrite a `.husky/_/h` left by a prior
-# container with a different effective UID. `.husky/_` is gitignored runtime
-# cache; husky regenerates it during npm install.
-rm -rf .husky/_
-
-echo "[post-create] 4/7: npm install at root (husky + lint-staged + prettier + eslint)"
-npm install
-
-echo "[post-create] 5/7: npm install + build gitnexus-shared"
-# gitnexus and gitnexus-web both consume gitnexus-shared via
-# file:../gitnexus-shared, so it must be built before either installs.
-cd /workspace/gitnexus-shared
-npm install
-npm run build
-
-echo "[post-create] 6/7: npm install gitnexus-web"
-# Must install BEFORE gitnexus: gitnexus's `prepare` script runs
-# scripts/build.js, which compiles gitnexus-web when the directory is
-# present. In the devcontainer the full workspace is bind-mounted, so
-# gitnexus-web/ is present at gitnexus install time even though it
-# wouldn't be in the production Dockerfiles (which COPY selectively).
-cd /workspace/gitnexus-web
-npm install
-
-echo "[post-create] 7/7: npm install gitnexus (triggers prepare -> scripts/build.js)"
-cd /workspace/gitnexus
-npm install
 
 echo "[post-create] done"
