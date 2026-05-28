@@ -60,17 +60,33 @@ link_readonly_share() {
     local dst_root=$2
     shift 2
     for name in "$@"; do
-        if [ -e "$src_root/$name" ] && [ ! -L "$dst_root/$name" ] && [ ! -e "$dst_root/$name" ]; then
+        # If dst exists as a non-symlink (stale from a prior run), remove
+        # it first so the symlink can land. Skips if dst is already the
+        # right symlink.
+        if [ -e "$src_root/$name" ]; then
+            if [ -L "$dst_root/$name" ]; then
+                continue  # already a symlink — leave alone
+            fi
+            rm -rf "$dst_root/$name"
             ln -s "$src_root/$name" "$dst_root/$name"
         fi
     done
 }
 
-copy_on_first_run() {
+sync_from_host() {
+    # ALWAYS overwrite from host on container-create, so a fresh container
+    # starts in the same auth/trust state as the host. Guarding on
+    # "[ ! -e $dst ]" was a bug: stale named volumes left over from earlier
+    # builds (or from a previous container instance that wrote interim
+    # state) made the guard return false and skip the copy, leaving the
+    # container desynced from the host. Container can still mutate the
+    # files after this point — divergence is reset only on container
+    # rebuild (which is when `post-create.sh` runs).
     local src=$1
     local dst=$2
     local mode=${3:-600}
-    if [ -f "$src" ] && [ ! -e "$dst" ]; then
+    if [ -f "$src" ]; then
+        rm -f "$dst"
         cp "$src" "$dst"
         chmod "$mode" "$dst"
     fi
@@ -81,40 +97,41 @@ copy_on_first_run() {
 link_readonly_share /host/.claude /home/node/.claude \
     plugins skills agents memory commands
 
-# `~/.claude.json` (FILE at $HOME — not inside .claude/) holds
-# hasCompletedOnboarding, userID, oauthAccount, per-project trust state,
-# MCP user-scope config. Without it, Claude Code fires the onboarding
-# wizard on every fresh container even when credentials are valid. Copy
-# the host's version on first run; fall back to a minimal stub so the
-# wizard is still bypassed for hosts that never installed Claude Code.
+# `~/.claude.json` at $HOME is one state file. There's a SECOND `.claude.json`
+# inside CLAUDE_CONFIG_DIR (`/home/node/.claude/.claude.json`) carrying
+# migration tracking, userID, and per-project trust state. If the userIDs
+# between the two don't match (e.g., the in-config one is left over from
+# a prior test session), Claude Code re-onboards. Sync BOTH from host.
+sync_from_host /host/.claude.json /home/node/.claude.json 644
+sync_from_host /host/.claude/.claude.json /home/node/.claude/.claude.json 644
+
+# If neither host file existed, write a minimal stub at $HOME so the
+# wizard is still bypassed for first-time hosts.
 if [ ! -f /home/node/.claude.json ]; then
-    if [ -s /host/.claude.json ]; then
-        cp /host/.claude.json /home/node/.claude.json
-    else
-        echo '{"hasCompletedOnboarding":true,"installMethod":"global"}' \
-            > /home/node/.claude.json
-    fi
+    echo '{"hasCompletedOnboarding":true,"installMethod":"global"}' \
+        > /home/node/.claude.json
     chmod 644 /home/node/.claude.json
 fi
 
-# Copy credentials on first run. Container manages refresh from here on.
-copy_on_first_run \
+# Credentials. Container managed its own refresh until next rebuild.
+sync_from_host \
     /host/.claude/.credentials.json /home/node/.claude/.credentials.json
 
-# Codex — share config.toml; copy auth.json on first run. Hosts using
-# OS keyring storage (`cli_auth_credentials_store = "keyring"`, default
-# on macOS) have no auth.json on disk — the copy silently no-ops and
-# `codex login --device-auth` inside the container is the path.
+# Codex — share config.toml; copy auth.json on container create. Hosts
+# using OS keyring storage (`cli_auth_credentials_store = "keyring"`,
+# default on macOS) have no auth.json on disk — the copy silently
+# no-ops and `codex login --device-auth` inside the container is the
+# path.
 link_readonly_share /host/.codex /home/node/.codex config.toml
-copy_on_first_run \
+sync_from_host \
     /host/.codex/auth.json /home/node/.codex/auth.json
 
 # Cursor CLI — cli-config.json conflates auth + settings, no shareable
-# subdirs. Copy on first run. Cursor has known upstream issues
+# subdirs. Copy on container create. Cursor has known upstream issues
 # authenticating inside Docker even with correctly-copied config; if
 # `cursor-agent` reports auth errors after copy, re-run
 # `cursor-agent login` inside the container.
-copy_on_first_run \
+sync_from_host \
     /host/.cursor/cli-config.json /home/node/.cursor/cli-config.json
 
 echo "[post-create] 3/7: clear stale .husky/_ runtime cache"
