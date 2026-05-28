@@ -1,7 +1,8 @@
 // Devcontainer for GitNexus. Pre-installs Claude Code, OpenAI Codex CLI,
 // and Cursor CLI alongside the Node.js native build chain. Cross-platform
-// (Win11+WSL2 + macOS + Linux), opened via the VS Code Dev Containers
-// extension.
+// across macOS, Linux, and Windows-via-WSL2 (Windows-native is unsupported
+// — see .devcontainer/README.md § Windows 11 setup). Opens via the VS Code
+// Dev Containers extension.
 //
 // First-time setup, auth flows, and troubleshooting: .devcontainer/README.md.
 {
@@ -18,17 +19,14 @@
     }
   },
 
-  // Runs on the HOST before the container is created. Ensures the bind
-  // mount sources (~/.claude, ~/.codex, ~/.cursor) exist so Docker doesn't
-  // reject the mount when a CLI has never been used on this host. Safe
-  // re-run; idempotent. See ensure-host-config-dirs.cjs.
-  "initializeCommand": "node .devcontainer/ensure-host-config-dirs.cjs",
+  // Runs on the HOST shell before the container is created. Guarantees the
+  // bind-mount source directories below exist so Docker doesn't reject the
+  // mount when a CLI has never been used on this host. Idempotent; safe to
+  // re-run. POSIX-shell only (Linux / macOS / WSL2) — Windows-native is
+  // out of scope per README's WSL2-required posture.
+  "initializeCommand": "mkdir -p $HOME/.claude $HOME/.codex $HOME/.cursor $HOME/.config/gh && touch $HOME/.gitconfig",
 
-  // Anthropic's official Claude Code Feature pulls the latest stable at
-  // build time; DISABLE_AUTOUPDATER below locks it inside the running
-  // container so rebuild is the only way the version changes.
   "features": {
-    "ghcr.io/anthropics/devcontainer-features/claude-code:1": {},
     "ghcr.io/devcontainers/features/github-cli:1": {}
   },
 
@@ -38,35 +36,45 @@
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
   "workspaceFolder": "/workspace",
 
-  // CLI config dirs are bind-mounted from the host so the developer's
-  // existing plugins, skills, agents, memory, settings, and credentials
-  // for Claude Code / Codex / Cursor are immediately available inside the
-  // container, and changes inside the container flow back to the host.
-  // The `initializeCommand` above guarantees these source paths exist on
-  // first up so Docker never errors out on a missing bind source. Anthropic
-  // recommends per-devcontainer named volumes instead in enterprise /
-  // high-trust environments; for personal dev where the host + container
-  // share the same trust boundary, bind mounts give the better daily-driver
-  // experience.
+  // Mount topology, by group:
   //
-  // Shell history, npm cache, and node_modules stay in named volumes
-  // scoped per-workspace — history doesn't need to escape the workspace,
-  // node_modules belong off the bind mount for Win/Mac perf, and the npm
-  // cache wants the container-native FS.
+  // 1. CLI config dirs — bind-mounted from the host so the developer's
+  //    existing plugins, skills, agents, memory, settings, and credentials
+  //    for Claude Code / Codex / Cursor + git identity + gh auth are
+  //    immediately available inside the container, and changes inside the
+  //    container flow back to the host. ~/.gitconfig is read-only so
+  //    container-side `git config --global` doesn't leak to host config.
+  //    For high-trust environments where host and container should NOT
+  //    share credentials, swap these three CLI bind mounts for
+  //    per-devcontainer named volumes (Anthropic's reference pattern).
+  //
+  // 2. Per-instance state — `${devcontainerId}` scoped: history and npm
+  //    cache survive container rebuilds but stay isolated between
+  //    sibling devcontainer instances.
+  //
+  // 3. Per-workspace-name AND per-instance state — workspace `node_modules`
+  //    volumes use both `${localWorkspaceFolderBasename}` (debuggable in
+  //    `docker volume ls`) and `${devcontainerId}` (collision-free between
+  //    sibling instances of the same repo, e.g., ~/work/GitNexus vs
+  //    ~/projects/GitNexus). Keeps tree-sitter native binaries and
+  //    onnxruntime off the workspace bind mount (the real Win/Mac perf win).
   "mounts": [
     "source=${localEnv:HOME}/.claude,target=/home/node/.claude,type=bind",
     "source=${localEnv:HOME}/.codex,target=/home/node/.codex,type=bind",
     "source=${localEnv:HOME}/.cursor,target=/home/node/.cursor,type=bind",
+    "source=${localEnv:HOME}/.gitconfig,target=/home/node/.gitconfig,type=bind,readonly",
+    "source=${localEnv:HOME}/.config/gh,target=/home/node/.config/gh,type=bind",
     "source=commandhistory-${devcontainerId},target=/commandhistory,type=volume",
     "source=npm-cache-${devcontainerId},target=/home/node/.npm,type=volume",
-    "source=${localWorkspaceFolderBasename}-root-node-modules,target=/workspace/node_modules,type=volume",
-    "source=${localWorkspaceFolderBasename}-gitnexus-node-modules,target=/workspace/gitnexus/node_modules,type=volume",
-    "source=${localWorkspaceFolderBasename}-gitnexus-web-node-modules,target=/workspace/gitnexus-web/node_modules,type=volume",
-    "source=${localWorkspaceFolderBasename}-gitnexus-shared-node-modules,target=/workspace/gitnexus-shared/node_modules,type=volume"
+    "source=${localWorkspaceFolderBasename}-root-node-modules-${devcontainerId},target=/workspace/node_modules,type=volume",
+    "source=${localWorkspaceFolderBasename}-gitnexus-node-modules-${devcontainerId},target=/workspace/gitnexus/node_modules,type=volume",
+    "source=${localWorkspaceFolderBasename}-gitnexus-web-node-modules-${devcontainerId},target=/workspace/gitnexus-web/node_modules,type=volume",
+    "source=${localWorkspaceFolderBasename}-gitnexus-shared-node-modules-${devcontainerId},target=/workspace/gitnexus-shared/node_modules,type=volume"
   ],
 
   // Interactive login is the default auth path for all three CLIs;
-  // credentials persist in the per-devcontainer named volumes mounted above.
+  // credentials persist in the host-bind-mounted directories (~/.claude,
+  // ~/.codex, ~/.cursor) declared in the mounts block above.
   // API keys (ANTHROPIC_API_KEY / OPENAI_API_KEY / CURSOR_API_KEY) are NOT
   // injected via containerEnv — `${localEnv:VAR}` resolves an unset host var
   // to an empty string, and Cursor in particular treats `CURSOR_API_KEY=""`
@@ -123,15 +131,9 @@
     }
   },
 
-  // Sequential setup: chown the workspace-side node_modules volumes (Docker
-  // creates them root-owned), drop any stale `.husky/_` runtime cache (it
-  // can be left over from prior runs and Docker Desktop's Windows bind-mount
-  // permission translation refuses to let the new container's `node` user
-  // overwrite a file the previous host UID created — husky's `prepare`
-  // copyfile then EPERMs on `.husky/_/h`), and install in dependency order:
-  // root (husky) → gitnexus-shared (install + build, consumed via file:..)
-  // → gitnexus-web (must install BEFORE gitnexus, because gitnexus's
-  // `prepare` script runs scripts/build.js which compiles gitnexus-web)
-  // → gitnexus (last; its prepare hook needs gitnexus-web's node_modules).
-  "postCreateCommand": "sudo chown -R node:node /workspace/node_modules /workspace/gitnexus/node_modules /workspace/gitnexus-web/node_modules /workspace/gitnexus-shared/node_modules && cd /workspace && rm -rf .husky/_ && npm install && cd /workspace/gitnexus-shared && npm install && npm run build && cd /workspace/gitnexus-web && npm install && cd /workspace/gitnexus && npm install"
+  // Driver script with labeled steps lives at .devcontainer/post-create.sh
+  // so each step's success/failure is visible in the log without parsing
+  // an &&-chain. Run via `bash` explicitly so the script doesn't depend
+  // on its executable bit surviving the workspace bind mount.
+  "postCreateCommand": "bash .devcontainer/post-create.sh"
 }

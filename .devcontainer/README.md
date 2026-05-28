@@ -1,6 +1,6 @@
 # GitNexus Devcontainer
 
-A cross-platform Dev Container that pre-installs Claude Code, OpenAI Codex CLI, and Cursor CLI alongside the GitNexus native build chain. Designed for Windows 11 (Docker Desktop + WSL2 backend) as the primary host with first-class support for macOS and Linux.
+A cross-platform Dev Container that pre-installs Claude Code, OpenAI Codex CLI, and Cursor CLI alongside the GitNexus native build chain. Supported hosts: **macOS, Linux, and Windows 11 via WSL2** (Windows-native is unsupported — see below).
 
 ## Quick start
 
@@ -10,9 +10,9 @@ A cross-platform Dev Container that pre-installs Claude Code, OpenAI Codex CLI, 
 4. Wait for the first build (~3–6 minutes) and `postCreateCommand` to finish installing workspace dependencies.
 5. Authenticate the three CLIs once — see [First-time CLI authentication](#first-time-cli-authentication) below.
 
-## Windows 11 (primary host) — WSL2 setup
+## Windows 11 — WSL2 is required
 
-**Clone the repo inside WSL2, not on the Windows side.** Bind-mounting a Windows-side path (`C:\…`) through Docker Desktop's WSL2 backend works but suffers from poor IO and unreliable file watchers (Vite/jest `--watch` will miss changes). The fix is to clone into the WSL2 filesystem.
+**Windows-native is unsupported.** The devcontainer bind-mounts host config dirs via `${localEnv:HOME}/.claude` (and `.codex`, `.cursor`, `.gitconfig`, `.config/gh`). On Windows-native, the host has `USERPROFILE` set but no `HOME` — VS Code resolves the missing `HOME` to an empty string and Docker tries to bind-mount paths from filesystem root, which silently breaks the host-sync feature. The same checkout-from-Windows-side path also has poor IO and unreliable file watchers (Vite/jest `--watch` will miss changes). The fix is to clone and open the repo inside WSL2:
 
 ```bash
 # 1. Install WSL2 and a Linux distro if you haven't already.
@@ -27,13 +27,12 @@ git clone https://github.com/abhigyanpatwari/GitNexus.git
 cd GitNexus
 
 # 4. Launch VS Code from inside WSL — this opens VS Code attached to the WSL2
-#    filesystem, so subsequent "Reopen in Container" uses the WSL2-side path.
+#    filesystem, so `${localEnv:HOME}` resolves to the WSL user's home and
+#    subsequent "Reopen in Container" uses the WSL2-side path.
 code .
 ```
 
-Then run **Dev Containers: Reopen in Container**. The workspace will be bind-mounted from `\\wsl$\Ubuntu\home\<user>\GitNexus`, which is fast and gives reliable file-system events.
-
-**Make sure Docker Desktop's WSL integration is enabled** for your distro: Docker Desktop → Settings → Resources → WSL Integration → toggle on the distro you cloned into.
+Then run **Dev Containers: Reopen in Container**. The workspace will be bind-mounted from `\\wsl$\Ubuntu\home\<user>\GitNexus`, which is fast and gives reliable file-system events. **Make sure Docker Desktop's WSL integration is enabled** for your distro: Docker Desktop → Settings → Resources → WSL Integration → toggle on the distro you cloned into.
 
 ## macOS
 
@@ -45,15 +44,38 @@ Same as macOS — open in VS Code and reopen in container. `updateRemoteUserUID:
 
 ## How CLI state is shared with your host
 
-`~/.claude`, `~/.codex`, and `~/.cursor` inside the container are **bind-mounted directly from your host's `$HOME`**. That means:
+The following directories inside the container are **bind-mounted directly from your host's `$HOME`**:
 
-- **Authentication is shared.** If you're already logged in on the host (`claude login`, `codex login`, `cursor-agent login`), you're already logged in inside the container. No second login step.
+| Container path | Host source | Mode |
+|---|---|---|
+| `~/.claude` | `$HOME/.claude` | read-write |
+| `~/.codex` | `$HOME/.codex` | read-write |
+| `~/.cursor` | `$HOME/.cursor` | read-write |
+| `~/.gitconfig` | `$HOME/.gitconfig` | **read-only** |
+| `~/.config/gh` | `$HOME/.config/gh` | read-write |
+
+That means:
+
+- **Authentication is shared.** If you're already logged in on the host (`claude login`, `codex login`, `cursor-agent login`, `gh auth login`), you're already logged in inside the container. No second login step.
 - **Plugins, skills, agents, memory, and settings sync both ways.** Install a plugin from inside the container and it shows up on the host; add a custom agent on the host and the container sees it immediately. The auto-memory store at `~/.claude/projects/<workspace>/memory/` is the same file tree from both sides.
-- **No per-workspace duplication.** All your devcontainers across all your projects see the same `.claude`/`.codex`/`.cursor` content, just like all your host shells do.
+- **Git identity comes from the host.** Commits from inside the container use your host's `user.name` / `user.email`. The mount is read-only so container-side `git config --global` doesn't leak to your host config — set those values from the host shell.
+- **`gh` auth is shared.** `gh pr create`, `gh pr checks`, `gh issue create` work inside the container without re-authenticating.
+- **No per-workspace duplication.** All your devcontainers across all your projects see the same host CLI state, just like all your host shells do.
 
-The bind mount source paths are guaranteed to exist by `.devcontainer/ensure-host-config-dirs.cjs`, which `initializeCommand` runs on the host before the container is created.
+The bind mount source directories are guaranteed to exist by the `initializeCommand` (`mkdir -p $HOME/.claude $HOME/.codex $HOME/.cursor $HOME/.config/gh`), which runs on the host shell before container create.
 
-For a high-trust enterprise environment where you don't want container code to be able to touch host credentials, replace the three `type=bind` entries for `.claude`/`.codex`/`.cursor` in `.devcontainer/devcontainer.json` with `type=volume` named volumes (Anthropic's reference pattern). Most personal-dev setups don't need that isolation — host and container share the same trust boundary.
+### Trust boundary, concretely
+
+Host and container share a single trust boundary by design — fine for personal-dev, but the consequence is concrete: any malicious npm package or `postinstall` script in the workspace dep tree, running inside the container with these bind mounts active, has direct read access to your OAuth refresh tokens for all three CLIs, your `gh` token, and `~/.claude/projects/<workspace>/memory/MEMORY.md` (which may contain user-stored secrets if you've used the `/remember` skill). The egress firewall is deferred (see "What's not included (yet)" below) so a compromised package would also have unrestricted network to exfiltrate.
+
+**If a workspace dep is ever found compromised**, rotate credentials at the vendor side — local file deletion is insufficient because tokens may have already left:
+
+- Anthropic: [console.anthropic.com → Settings → Keys](https://console.anthropic.com/settings/keys), revoke the OAuth session under Account
+- OpenAI / Codex: [platform.openai.com/api-keys](https://platform.openai.com/api-keys), revoke session under Profile
+- Cursor: dashboard → Integrations, rotate API key + revoke CLI session
+- GitHub: `gh auth refresh` or revoke the token at github.com/settings/tokens
+
+For high-trust enterprise environments where host and container should NOT share credentials, swap the three CLI bind mounts (`~/.claude`, `~/.codex`, `~/.cursor`) in `.devcontainer/devcontainer.json` for `type=volume` named volumes (Anthropic's reference pattern). You give up host plugin/skill/memory sync in exchange for credential isolation per devcontainer.
 
 ## First-time CLI authentication
 
@@ -144,15 +166,12 @@ VS Code's Ports panel shows forwarded ports once their listener starts.
 
 ## Bumping CLI versions
 
-Three build args control pinned versions:
-
-- `CLAUDE_CODE_VERSION` — informational. Anthropic's official Feature (`ghcr.io/anthropics/devcontainer-features/claude-code:1`) installs the latest stable at build time; rebuild to pick up a newer Claude Code. `DISABLE_AUTOUPDATER=1` keeps it locked between rebuilds.
-- `CODEX_VERSION` — pinned in `.devcontainer/devcontainer.json` `build.args` and consumed by `npm install -g @openai/codex@${CODEX_VERSION}`. Bump the value and rebuild.
-- `CURSOR_VERSION` — informational only. The Cursor installer (`cursor.com/install`) does not expose version pinning; it always pulls latest at build time. To bump, rebuild the container; auto-update inside the running container is suppressed by not invoking `cursor-agent update`.
+Bump `CLAUDE_CODE_VERSION` and `CODEX_VERSION` in `.devcontainer/devcontainer.json` `build.args` and rebuild — both are real pins (Claude Code via `npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}`, Codex via `npm install -g @openai/codex@${CODEX_VERSION}`). `CURSOR_VERSION` is informational only because Cursor's official installer (`cursor.com/install`) doesn't expose version pinning; rebuild to pick up whatever the installer serves. To stop Cursor from auto-updating in the running container, don't call `cursor-agent update`.
 
 ## What's not included (yet)
 
 - **Egress firewall.** The original plan included an opt-in iptables/ipset firewall adapted from Anthropic's reference devcontainer. It was deferred to a follow-up PR — `runArgs` is static in `devcontainer.json`, so toggling NET_ADMIN/NET_RAW capabilities cleanly requires either a separate `devcontainer-firewall.json` profile or an `initializeCommand`-generated overlay. Track at the project's issue tracker if you need this.
+- **Hard-pinned Cursor CLI.** Today the Dockerfile downloads `cursor.com/install` to a temp file, logs the sha256 to the build output (so drift across rebuilds is visible in CI logs), then executes — trust assumption: cursor.com's TLS chain is reliable. The full pin (download a specific `downloads.cursor.com/lab/<version>/<arch>/agent-cli-package.tar.gz` with a verified sha256, skip the install script entirely) is tracked as a follow-up because it requires per-arch handling and a SHA bump per Cursor release.
 - **Codespaces tuning.** The current config works in Codespaces incidentally (no privileged capabilities, no host-mount assumptions), but isn't actively tested there.
 - **Playwright e2e support.** `gitnexus-web`'s `npm run test:e2e` needs Chromium libs that the base image doesn't ship. Use the host for e2e until a Playwright layer is added.
 
@@ -160,10 +179,12 @@ Three build args control pinned versions:
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| `EACCES` / `EPERM` writing into `~/.claude`, `~/.codex`, or `~/.cursor` inside the container | Windows-side bind-mount permission translation got out of sync after a UID change between rebuilds | On the host, ensure your user owns the directory tree; if it's truly stuck, move the affected dir aside and let the CLI rebuild it (`mv ~/.claude ~/.claude.bak` and log in again). Long-term: clone in WSL2 — bind-mount permission classes don't apply to WSL-side filesystems |
-| `EPERM: operation not permitted, copyfile ... '.husky/_/h'` in `postCreateCommand` | Leftover `.husky/_/` from a previous container run; Docker Desktop's Windows bind mount won't let the new container's `node` user overwrite it. `postCreateCommand` already runs `rm -rf .husky/_` defensively, but if you hit it on an older config, delete `.husky/_/` on the host (`rm -rf .husky/_`) and rebuild | Long-term: clone the repo inside WSL2 (see [Windows 11 WSL2 setup](#windows-11-primary-host--wsl2-setup)) — WSL-side filesystems don't have this bind-mount class of issue |
-| Vite never hot-reloads on Windows | Repo cloned on Windows side, not WSL2 | Re-clone inside WSL2 (see [WSL2 setup](#windows-11-primary-host--wsl2-setup)) |
+| `EACCES` / `EPERM` writing into `~/.claude`, `~/.codex`, or `~/.cursor` inside the container | Windows-side bind-mount permission translation got out of sync after a UID change between rebuilds | Move to WSL2 — Windows-native isn't supported. See [Windows 11 — WSL2 is required](#windows-11--wsl2-is-required) |
+| `EPERM: operation not permitted, copyfile ... '.husky/_/h'` in `postCreateCommand` | Leftover `.husky/_/` from a previous container run on a Windows-side bind mount | `post-create.sh` already runs `rm -rf .husky/_` defensively. If you hit this on an older config, delete `.husky/_/` on the host and rebuild. Long-term: clone in WSL2 |
+| Vite never hot-reloads | Repo cloned on Windows side, not WSL2 | Re-clone inside WSL2 |
 | `gitnexus-web` can't reach the backend | `4747` was remapped or backend isn't running | Verify the Ports panel shows `4747` forwarded with no remap; start the backend with `cd gitnexus && npx gitnexus serve` |
 | `npm install` fails on tree-sitter-swift / proto / dart | Native build toolchain missing | This shouldn't happen in the devcontainer — verify the apt layer installed `python3 make g++`. If iterating, set `GITNEXUS_SKIP_OPTIONAL_GRAMMARS=1` to skip the vendored grammars |
 | Integration tests fail with `database busy` | LadybugDB single-writer constraint | Don't run host-side `gitnexus analyze` while the container is also analyzing the same repo; choose one writer |
 | API key env vars not visible inside the container | They are intentionally not auto-propagated from the host (so an empty/stale host var can't silently break `*-login` for everyone else) | `export ANTHROPIC_API_KEY=...` / `OPENAI_API_KEY=...` / `CURSOR_API_KEY=...` inside the container shell, or carry it via your VS Code [dotfiles repo](https://code.visualstudio.com/docs/devcontainers/containers#_personalizing-with-dotfile-repositories) for persistence |
+| `git commit` produces commits with empty author | `~/.gitconfig` source path missing on the host | Set `git config --global user.name` / `user.email` from the host shell, then rebuild. The bind mount is read-only so the values come from the host |
+| `gh: not logged in` inside the container | `~/.config/gh/` source path missing on the host | Run `gh auth login` from the host shell (or inside the container once); the auth file lands in the shared mount |
