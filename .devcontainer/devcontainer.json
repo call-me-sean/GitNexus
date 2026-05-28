@@ -105,8 +105,23 @@
   // would silently break `cursor-agent login`. Users who need API key auth
   // should `export` the var in their container shell or carry it via their
   // VS Code dotfiles repo (see .devcontainer/README.md).
+  // CLAUDE_CONFIG_DIR is intentionally NOT set. The Claude default is
+  // `$HOME/.claude` (= `/home/node/.claude`), which is exactly where the
+  // claude-config named volume mounts — setting the env var explicitly
+  // changes which file Claude reads `hasCompletedOnboarding` from: with
+  // the var set, Claude reads `$CLAUDE_CONFIG_DIR/.claude.json` (the
+  // small identity file); without it, Claude reads `$HOME/.claude.json`
+  // (the big onboarding-state file that actually carries
+  // `hasCompletedOnboarding`, MCP user-scope config, and per-project
+  // trust). Leaving the var unset matches host behavior and lets
+  // post-create.sh's host-sync of `$HOME/.claude.json` skip the wizard
+  // on every container-create.
+  //
+  // CODEX_HOME is kept (even though it matches the Codex default) as a
+  // canary: if we ever move the Codex named volume target, the env var
+  // makes the dependency explicit instead of silently following the
+  // default.
   "containerEnv": {
-    "CLAUDE_CONFIG_DIR": "/home/node/.claude",
     "CODEX_HOME": "/home/node/.codex",
     "DISABLE_AUTOUPDATER": "1",
     "HISTFILE": "/commandhistory/.zsh_history"

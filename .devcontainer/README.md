@@ -94,11 +94,12 @@ The three AI CLIs use a **hybrid topology** so you get host plugins/skills/memor
 
 - **Symlinks shared subdirs from the read-only host stage** into the container's config volume, so installing a plugin on the host shows up in the container after a rebuild. The shared list:
   - **Claude**: `plugins/`, `skills/`, `agents/`, `memory/`, `commands/` — your user-installed surface
-  - **Codex**: `config.toml` — your user prefs
-  - **Cursor**: nothing shared (cli-config.json conflates auth + settings, no shareable subdirs)
+  - **Codex**: `config.toml`, `memories/`, `skills/` — your prefs + user-installed surface (symmetric with Claude)
+  - **Cursor**: nothing shared via symlink (Cursor's `cli-config.json` conflates auth + settings; no separate plugin surface)
 - **Syncs these from host into the container's config volume** (not symlinks — container can refresh/rewrite freely, host stays untouched). Sync is "always overwrite if host has the file, otherwise leave container alone", so logging in on host populates the container on next rebuild, and logging in only inside the container keeps that login (host has no source to overwrite from):
   - `.credentials.json` (Claude), `auth.json` (Codex), `cli-config.json` (Cursor) — credentials
-  - **Two Claude state files**: `$HOME/.claude.json` (carries `hasCompletedOnboarding`, `userID`, `oauthAccount`, per-project trust state, MCP user-scope config) **and** `$CLAUDE_CONFIG_DIR/.claude.json` (carries migration tracking, the same `userID`, per-project trust). Both must agree on `userID` or Claude Code re-onboards; the sync covers both. Stub fallback `{"hasCompletedOnboarding":true,"installMethod":"global"}` written to `$HOME/.claude.json` only if the host had neither file.
+  - **Two Claude state files**: `$HOME/.claude.json` (carries `hasCompletedOnboarding`, MCP user-scope config, project trust, `tipsHistory`) **and** `~/.claude/.claude.json` (carries `userID`, `oauthAccount`, migration tracking). Both files get synced. We deliberately leave `CLAUDE_CONFIG_DIR` unset (Claude's default `~/.claude` matches the named-volume mount target) so Claude reads onboarding state from `$HOME/.claude.json` — which is where `hasCompletedOnboarding` lives. With `CLAUDE_CONFIG_DIR` set, Claude would instead read the small identity-only file and re-onboard every container. Stub fallback `{"hasCompletedOnboarding":true,"installMethod":"global"}` written to `$HOME/.claude.json` only if the host had neither file.
+  - **`settings.json`** (Claude) — theme, `enabledPlugins`, and `extraKnownMarketplaces`. Without this synced, theme picker fires on every fresh volume and host-installed plugins stay disabled even though their files are symlinked in. We pin Claude Code via `CLAUDE_CODE_VERSION`, so version drift between host (floating) and container (pinned) is bounded — Claude tolerates unknown keys, and we re-sync on every container-create anyway.
 
 **Why read-only stage + named volume instead of a single host bind mount:**
 

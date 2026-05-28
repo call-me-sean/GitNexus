@@ -92,37 +92,50 @@ sync_from_host() {
     fi
 }
 
-# Claude Code — share plugins, skills, agents, memory, commands (the
-# user-installed surface). Skip ide/projects/settings.json per above.
+# Claude Code — share the user-installed surface (plugins/skills/agents/
+# memory/commands) read-only from host. Skip ide/projects per above.
 link_readonly_share /host/.claude /home/node/.claude \
     plugins skills agents memory commands
 
-# `~/.claude.json` at $HOME is one state file. There's a SECOND `.claude.json`
-# inside CLAUDE_CONFIG_DIR (`/home/node/.claude/.claude.json`) carrying
-# migration tracking, userID, and per-project trust state. If the userIDs
-# between the two don't match (e.g., the in-config one is left over from
-# a prior test session), Claude Code re-onboards. Sync BOTH from host.
+# State files. Claude splits state across two files: $HOME/.claude.json
+# (hasCompletedOnboarding, MCP user-scope config, project trust,
+# tipsHistory) and $CLAUDE_CONFIG_DIR/.claude.json (userID, oauthAccount,
+# migration tracking). With CLAUDE_CONFIG_DIR unset (see devcontainer.json
+# rationale), Claude reads onboarding state from $HOME/.claude.json —
+# which carries `hasCompletedOnboarding` and skips the wizard.
 sync_from_host /host/.claude.json /home/node/.claude.json 644
 sync_from_host /host/.claude/.claude.json /home/node/.claude/.claude.json 644
 
-# If neither host file existed, write a minimal stub at $HOME so the
-# wizard is still bypassed for first-time hosts.
+# settings.json carries the active theme, enabled plugins, and known
+# marketplaces — without this, theme picker fires on every fresh volume
+# and host-installed plugins stay disabled even though their files are
+# symlinked in by link_readonly_share above. We pin Claude Code version
+# in devcontainer.json, so schema drift between host (floating) and
+# container (pinned) is bounded — Claude tolerates unknown keys, and
+# we re-sync on every container-create.
+sync_from_host /host/.claude/settings.json /home/node/.claude/settings.json 644
+
+# Stub fallback at $HOME/.claude.json for first-time hosts that never
+# ran Claude Code (host file is empty or missing — `sync_from_host`
+# leaves the container's path missing too).
 if [ ! -f /home/node/.claude.json ]; then
     echo '{"hasCompletedOnboarding":true,"installMethod":"global"}' \
         > /home/node/.claude.json
     chmod 644 /home/node/.claude.json
 fi
 
-# Credentials. Container managed its own refresh until next rebuild.
+# Credentials. Container manages its own refresh until next rebuild.
 sync_from_host \
     /host/.claude/.credentials.json /home/node/.claude/.credentials.json
 
-# Codex — share config.toml; copy auth.json on container create. Hosts
-# using OS keyring storage (`cli_auth_credentials_store = "keyring"`,
-# default on macOS) have no auth.json on disk — the copy silently
-# no-ops and `codex login --device-auth` inside the container is the
-# path.
-link_readonly_share /host/.codex /home/node/.codex config.toml
+# Codex — share config.toml + memories/ + skills/ (the user-installed
+# surface, symmetric with Claude's plugin/skill/agent sharing). Sync
+# auth.json on container-create. Hosts using OS keyring storage
+# (`cli_auth_credentials_store = "keyring"`, default on macOS) have no
+# auth.json on disk — the copy silently no-ops and
+# `codex login --device-auth` inside the container is the path.
+link_readonly_share /host/.codex /home/node/.codex \
+    config.toml memories skills
 sync_from_host \
     /host/.codex/auth.json /home/node/.codex/auth.json
 
