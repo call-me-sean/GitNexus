@@ -1,0 +1,108 @@
+// Devcontainer for GitNexus. Pre-installs Claude Code, OpenAI Codex CLI,
+// and Cursor CLI alongside the Node.js native build chain. Cross-platform
+// (Win11+WSL2 + macOS + Linux), opened via the VS Code Dev Containers
+// extension.
+//
+// First-time setup, auth flows, and troubleshooting: .devcontainer/README.md.
+{
+  "name": "GitNexus AI CLI Devcontainer",
+
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".",
+    "args": {
+      "CLAUDE_CODE_VERSION": "2.1.153",
+      "CODEX_VERSION": "0.134.0",
+      "CURSOR_VERSION": "latest",
+      "TZ": "${localEnv:TZ:UTC}"
+    }
+  },
+
+  // Anthropic's official Claude Code Feature pulls the latest stable at
+  // build time; DISABLE_AUTOUPDATER below locks it inside the running
+  // container so rebuild is the only way the version changes.
+  "features": {
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+
+  "remoteUser": "node",
+  "updateRemoteUserUID": true,
+
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
+  "workspaceFolder": "/workspace",
+
+  // Named volumes scoped per-devcontainer keep auth tokens, history, and
+  // node_modules persistent across rebuilds without leaking between
+  // workspaces. Sub-workspace node_modules volumes keep tree-sitter native
+  // binaries and onnxruntime off the bind mount (the real Win/Mac perf win).
+  "mounts": [
+    "source=claude-config-${devcontainerId},target=/home/node/.claude,type=volume",
+    "source=codex-config-${devcontainerId},target=/home/node/.codex,type=volume",
+    "source=cursor-config-${devcontainerId},target=/home/node/.cursor,type=volume",
+    "source=commandhistory-${devcontainerId},target=/commandhistory,type=volume",
+    "source=npm-cache-${devcontainerId},target=/home/node/.npm,type=volume",
+    "source=${localWorkspaceFolderBasename}-root-node-modules,target=/workspace/node_modules,type=volume",
+    "source=${localWorkspaceFolderBasename}-gitnexus-node-modules,target=/workspace/gitnexus/node_modules,type=volume",
+    "source=${localWorkspaceFolderBasename}-gitnexus-web-node-modules,target=/workspace/gitnexus-web/node_modules,type=volume",
+    "source=${localWorkspaceFolderBasename}-gitnexus-shared-node-modules,target=/workspace/gitnexus-shared/node_modules,type=volume"
+  ],
+
+  // CURSOR_API_KEY resolves at container-create time from the host shell
+  // that opened VS Code (empty fallback triggers interactive cursor-agent
+  // login). Set CURSOR_API_KEY on the host and rebuild to inject a new key.
+  "containerEnv": {
+    "CLAUDE_CONFIG_DIR": "/home/node/.claude",
+    "DISABLE_AUTOUPDATER": "1",
+    "CURSOR_API_KEY": "${localEnv:CURSOR_API_KEY}",
+    "HISTFILE": "/commandhistory/.zsh_history"
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "anthropic.claude-code",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "eamodio.gitlens"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "editor.codeActionsOnSave": {
+          "source.fixAll.eslint": "explicit"
+        },
+        "files.eol": "\n",
+        "terminal.integrated.defaultProfile.linux": "zsh",
+        "terminal.integrated.profiles.linux": {
+          "bash": { "path": "bash", "icon": "terminal-bash" },
+          "zsh": { "path": "zsh" }
+        }
+      }
+    }
+  },
+
+  // 4747 (gitnexus serve) must not be remapped: gitnexus-web hardcodes
+  // http://localhost:4747 as the default backend URL.
+  "forwardPorts": [5173, 4747, 4173],
+  "portsAttributes": {
+    "5173": {
+      "label": "Vite dev (gitnexus-web)",
+      "onAutoForward": "notify"
+    },
+    "4747": {
+      "label": "gitnexus serve HTTP API",
+      "onAutoForward": "notify",
+      "requireLocalPort": true
+    },
+    "4173": {
+      "label": "Static web (Vite preview)",
+      "onAutoForward": "silent"
+    }
+  },
+
+  // Sequential setup: chown the workspace-side node_modules volumes (Docker
+  // creates them root-owned), then install in dependency order
+  // (gitnexus-shared must build before its consumers).
+  "postCreateCommand": "sudo chown -R node:node /workspace/node_modules /workspace/gitnexus/node_modules /workspace/gitnexus-web/node_modules /workspace/gitnexus-shared/node_modules && cd /workspace && npm install && cd /workspace/gitnexus-shared && npm install && npm run build && cd /workspace/gitnexus && npm install && cd /workspace/gitnexus-web && npm install"
+}
