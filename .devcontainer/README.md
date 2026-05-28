@@ -6,9 +6,10 @@ A cross-platform Dev Container that pre-installs Claude Code, OpenAI Codex CLI, 
 
 1. Install [Docker Desktop](https://docs.docker.com/desktop/) (Windows/macOS) or Docker Engine (Linux).
 2. Install [VS Code](https://code.visualstudio.com/) with the [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers).
-3. Open the repo in VS Code → Command Palette → **Dev Containers: Reopen in Container**.
-4. Wait for the first build (~3–6 minutes) and `postCreateCommand` to finish installing workspace dependencies.
-5. Authenticate the three CLIs once — see [First-time CLI authentication](#first-time-cli-authentication) below.
+3. Install [Node.js](https://nodejs.org/) on the **host** (Node 18+). This is the only host-side toolchain dependency beyond Docker and VS Code — the devcontainer's `initializeCommand` runs `node .devcontainer/ensure-host-config-dirs.cjs` to set up the bind-mount source directories before container create. If you already use Claude Code or another Node-based CLI on the host, you're already set.
+4. Open the repo in VS Code → Command Palette → **Dev Containers: Reopen in Container**.
+5. Wait for the first build (~3–6 minutes) and `postCreateCommand` to finish installing workspace dependencies.
+6. Authenticate the three CLIs once — see [First-time CLI authentication](#first-time-cli-authentication) below.
 
 ## Windows 11 — WSL2 is strongly recommended
 
@@ -58,13 +59,16 @@ The following directories inside the container are **bind-mounted directly from 
 | `~/.codex` | `$HOME/.codex` | read-write |
 | `~/.cursor` | `$HOME/.cursor` | read-write |
 | `~/.gitconfig` | `$HOME/.gitconfig` | **read-only** |
+| `~/.config/git` | `$HOME/.config/git` | **read-only** |
+| `~/.ssh` | `$HOME/.ssh` | **read-only** |
 | `~/.config/gh` | `$HOME/.config/gh` | read-write |
 
 That means:
 
 - **Authentication is shared.** If you're already logged in on the host (`claude login`, `codex login`, `cursor-agent login`, `gh auth login`), you're already logged in inside the container. No second login step.
 - **Plugins, skills, agents, memory, and settings sync both ways.** Install a plugin from inside the container and it shows up on the host; add a custom agent on the host and the container sees it immediately. The auto-memory store at `~/.claude/projects/<workspace>/memory/` is the same file tree from both sides.
-- **Git identity comes from the host.** Commits from inside the container use your host's `user.name` / `user.email`. The mount is read-only so container-side `git config --global` doesn't leak to your host config — set those values from the host shell.
+- **Git identity comes from the host.** Commits from inside the container use your host's `user.name` / `user.email` from `~/.gitconfig` and any XDG-style config under `~/.config/git/`. The mounts are read-only so container-side `git config --global` doesn't leak to host config — set those values from the host shell.
+- **SSH keys flow through (read-only).** Push over SSH remotes and SSH commit signing work inside the container using your host keys. The mount is read-only so container code can't exfiltrate or modify private keys — agent-perspective, this means you get git operations but the keys stay vendor-side.
 - **`gh` auth is shared.** `gh pr create`, `gh pr checks`, `gh issue create` work inside the container without re-authenticating.
 - **No per-workspace duplication.** All your devcontainers across all your projects see the same host CLI state, just like all your host shells do.
 
@@ -72,7 +76,7 @@ The bind mount source directories are guaranteed to exist by the `initializeComm
 
 ### Trust boundary, concretely
 
-Host and container share a single trust boundary by design — fine for personal-dev, but the consequence is concrete: any malicious npm package or `postinstall` script in the workspace dep tree, running inside the container with these bind mounts active, has direct read access to your OAuth refresh tokens for all three CLIs, your `gh` token, and `~/.claude/projects/<workspace>/memory/MEMORY.md` (which may contain user-stored secrets if you've used the `/remember` skill). The egress firewall is deferred (see "What's not included (yet)" below) so a compromised package would also have unrestricted network to exfiltrate.
+Host and container share a single trust boundary by design — fine for personal-dev, but the consequence is concrete: any malicious npm package or `postinstall` script in the workspace dep tree, running inside the container with these bind mounts active, has direct read access to your OAuth refresh tokens for all three CLIs, your `gh` token, **your SSH private keys under `~/.ssh/`**, and `~/.claude/projects/<workspace>/memory/MEMORY.md` (which may contain user-stored secrets if you've used the `/remember` skill). Read-only mounts on `~/.ssh`, `~/.gitconfig`, and `~/.config/git` prevent container code from modifying or deleting them, but they're still readable. The egress firewall is deferred (see "What's not included (yet)" below) so a compromised package would also have unrestricted network to exfiltrate.
 
 **If a workspace dep is ever found compromised**, rotate credentials at the vendor side — local file deletion is insufficient because tokens may have already left:
 
