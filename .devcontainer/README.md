@@ -1,6 +1,6 @@
 # GitNexus Devcontainer
 
-A cross-platform Dev Container that pre-installs Claude Code, OpenAI Codex CLI, and Cursor CLI alongside the GitNexus native build chain. Supported hosts: **macOS, Linux, Windows 11 via WSL2 (strongly recommended), and Windows 11 native (works but slower, with more bind-mount edge cases — see below).**
+A cross-platform Dev Container that pre-installs Claude Code, OpenAI Codex CLI, and Cursor CLI alongside the GitNexus native build chain. Supported hosts: **macOS, Linux, and Windows 11 via WSL2** (Windows-native is unsupported — the bind mounts require `$HOME` to be set on the host shell, which cmd.exe on Windows-native lacks).
 
 ## Quick start
 
@@ -11,13 +11,11 @@ A cross-platform Dev Container that pre-installs Claude Code, OpenAI Codex CLI, 
 5. Wait for the first build (~3–6 minutes) and `postCreateCommand` to finish installing workspace dependencies.
 6. Authenticate the three CLIs once — see [First-time CLI authentication](#first-time-cli-authentication) below.
 
-## Windows 11 — WSL2 is strongly recommended
+## Windows 11 — WSL2 is required
 
-Both WSL2 and Windows-native checkouts work. WSL2 is meaningfully better:
+**Windows-native is unsupported.** The host bind mounts use `${localEnv:HOME}/.claude` (and `.codex`, `.cursor`, `.ssh`, `.config/git`, `.config/gh`, `.gitconfig`). VS Code resolves `${localEnv:HOME}` by reading the host shell's `HOME` env var — and cmd.exe on Windows-native has no `HOME` set. The bind sources then collapse to filesystem-root paths (`/.claude`, `/.codex`, …) and Docker rejects them with `bind source path does not exist`. The `initializeCommand`'s Node script detects this case and fails fast with a pointer at this section instead of letting Docker error opaquely.
 
-- **File-watcher reliability.** Vite/jest `--watch` see file changes reliably on the WSL2 filesystem; Windows-native bind-mounts miss events intermittently.
-- **`npm install` performance.** WSL2-side IO is ~3-5× faster for the heavy `gitnexus` install (tree-sitter native bindings, onnxruntime, vendored grammars).
-- **No bind-mount permission edge cases.** Docker Desktop's Windows bind-mount permission translation can EPERM when a previous container created a file (e.g., `.husky/_/h`) and a new container with a different effective UID tries to overwrite it. WSL2-side filesystems don't have this class of issue (the `post-create.sh` defensive `rm -rf .husky/_` mitigates the most common case but isn't a full fix).
+Beyond the `HOME` resolution issue, WSL2 also gives you reliable file watchers (Vite/jest `--watch` work), 3-5× faster `npm install` IO, and avoids the Docker Desktop Windows bind-mount permission edge cases (e.g., the husky `.husky/_/h` EPERM class).
 
 To clone and open the repo inside WSL2:
 
@@ -189,7 +187,8 @@ Bump `CLAUDE_CODE_VERSION` and `CODEX_VERSION` in `.devcontainer/devcontainer.js
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| `EACCES` / `EPERM` writing into `~/.claude`, `~/.codex`, or `~/.cursor` inside the container | Windows-side bind-mount permission translation got out of sync after a UID change between rebuilds | Move the affected dir aside and let the CLI rebuild it (`mv ~/.claude ~/.claude.bak` and log in again). Long-term: clone in WSL2 — that filesystem doesn't hit this class of issue. See [Windows 11 — WSL2 is strongly recommended](#windows-11--wsl2-is-strongly-recommended) |
+| `ERROR: GitNexus devcontainer requires WSL2 on Windows 11` from `initializeCommand` | You opened the repo from a Windows-native path; `cmd.exe` has no `$HOME`, so the bind mounts can't resolve | Clone the repo inside WSL2 and reopen — see [Windows 11 — WSL2 is required](#windows-11--wsl2-is-required) |
+| `EACCES` / `EPERM` writing into `~/.claude`, `~/.codex`, or `~/.cursor` inside the container | Stale state from a previous container with a different effective UID | Move the affected dir aside and let the CLI rebuild it (`mv ~/.claude ~/.claude.bak` and log in again). Long-term: WSL2 setup, which doesn't hit this class of issue |
 | `EPERM: operation not permitted, copyfile ... '.husky/_/h'` in `postCreateCommand` | Leftover `.husky/_/` from a previous container run on a Windows-side bind mount | `post-create.sh` already runs `rm -rf .husky/_` defensively. If you hit this on an older config, delete `.husky/_/` on the host and rebuild. Long-term: clone in WSL2 |
 | Vite never hot-reloads | Repo cloned on Windows side, not WSL2 | Re-clone inside WSL2 |
 | `gitnexus-web` can't reach the backend | `4747` was remapped or backend isn't running | Verify the Ports panel shows `4747` forwarded with no remap; start the backend with `cd gitnexus && npx gitnexus serve` |
