@@ -65,6 +65,64 @@ sync_from_host \
 sync_from_host \
     /host/.claude/.claude.json /home/node/.claude/.claude.json 644
 
+# Plugin registry path translation. Claude writes absolute OS-native paths
+# into known_marketplaces.json (`installLocation`), installed_plugins.json
+# (`installPath`), and plugin-catalog-cache.json — `C:\Users\X\.claude\...`
+# on Windows hosts, `/Users/X/.claude/...` on macOS — so the host versions
+# can't be bind-mounted into the Linux container (Claude would fail with
+# `cache-miss` trying to resolve a Windows path inside Linux). Read host's
+# registry files, rewrite every absolute path that ends in
+# `/.claude/plugins/<rest>` to `/home/node/.claude/plugins/<rest>`, and
+# write the result into the container's named volume.
+mkdir -p /home/node/.claude/plugins
+node <<'NODE'
+const fs = require("fs");
+const path = require("path");
+
+const HOST = "/host/.claude/plugins";
+const CTR = "/home/node/.claude/plugins";
+
+// Match any absolute path (Windows `C:\Users\…\.claude\plugins\<rest>`
+// or POSIX `/Users/…/.claude/plugins/<rest>` or
+// `/home/…/.claude/plugins/<rest>`) and translate to the container path.
+const rewrite = (s) => {
+    if (typeof s !== "string") return s;
+    return s.replace(
+        /^(?:[A-Za-z]:)?[\\/].*?[\\/]\.claude[\\/]plugins[\\/](.*)$/,
+        (_, rest) => `${CTR}/${rest.replace(/\\/g, "/")}`,
+    );
+};
+
+const rewriteDeep = (obj) => {
+    if (Array.isArray(obj)) return obj.map(rewriteDeep);
+    if (obj && typeof obj === "object") {
+        const out = {};
+        for (const [k, v] of Object.entries(obj)) {
+            out[k] = typeof v === "string" ? rewrite(v) : rewriteDeep(v);
+        }
+        return out;
+    }
+    return obj;
+};
+
+for (const name of [
+    "known_marketplaces.json",
+    "installed_plugins.json",
+    "plugin-catalog-cache.json",
+]) {
+    const src = path.join(HOST, name);
+    const dst = path.join(CTR, name);
+    if (!fs.existsSync(src) || fs.statSync(src).size === 0) continue;
+    let data;
+    try {
+        data = JSON.parse(fs.readFileSync(src, "utf8"));
+    } catch {
+        continue;
+    }
+    fs.writeFileSync(dst, JSON.stringify(rewriteDeep(data), null, 2));
+}
+NODE
+
 # Codex auth. Hosts using OS keyring storage
 # (`cli_auth_credentials_store = "keyring"`, default on macOS) have no
 # auth.json on disk — the copy silently no-ops and

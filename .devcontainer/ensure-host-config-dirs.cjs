@@ -92,6 +92,12 @@ const home = os.homedir();
 const dirs = [
   ".claude",
   path.join(".claude", "plugins"),
+  // Plugin registry source dirs — content is path-independent so these
+  // get RW bind-mounted bidirectionally. The path-DEPENDENT registry
+  // JSONs (known_marketplaces.json, installed_plugins.json,
+  // plugin-catalog-cache.json) stay in the container's named volume.
+  path.join(".claude", "plugins", "marketplaces"),
+  path.join(".claude", "plugins", "cache"),
   path.join(".claude", "skills"),
   path.join(".claude", "agents"),
   path.join(".claude", "memory"),
