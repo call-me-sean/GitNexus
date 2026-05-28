@@ -66,7 +66,6 @@
     "source=${localEnv:HOME}/.claude,target=/home/node/.claude,type=bind",
     "source=${localEnv:HOME}/.codex,target=/home/node/.codex,type=bind",
     "source=${localEnv:HOME}/.cursor,target=/home/node/.cursor,type=bind",
-    "source=${localEnv:HOME}/.gitconfig,target=/home/node/.gitconfig,type=bind,readonly",
     "source=${localEnv:HOME}/.config/git,target=/home/node/.config/git,type=bind,readonly",
     "source=${localEnv:HOME}/.ssh,target=/home/node/.ssh,type=bind,readonly",
     "source=${localEnv:HOME}/.config/gh,target=/home/node/.config/gh,type=bind",

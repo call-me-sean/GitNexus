@@ -83,16 +83,17 @@ The following directories inside the container are **bind-mounted directly from 
 | `~/.claude` | `$HOME/.claude` | read-write |
 | `~/.codex` | `$HOME/.codex` | read-write |
 | `~/.cursor` | `$HOME/.cursor` | read-write |
-| `~/.gitconfig` | `$HOME/.gitconfig` | **read-only** |
 | `~/.config/git` | `$HOME/.config/git` | **read-only** |
 | `~/.ssh` | `$HOME/.ssh` | **read-only** |
 | `~/.config/gh` | `$HOME/.config/gh` | read-write |
+
+`~/.gitconfig` is **not** bind-mounted — VS Code's Dev Containers extension auto-copies the host's gitconfig into the container at attach time (this is built-in behavior, not something this devcontainer configures). The bind-mount approach conflicts with that auto-copy mechanism, so we let VS Code own it. The end result is the same: your host's `user.name` / `user.email` are available inside the container.
 
 That means:
 
 - **Authentication is shared.** If you're already logged in on the host (`claude login`, `codex login`, `cursor-agent login`, `gh auth login`), you're already logged in inside the container. No second login step.
 - **Plugins, skills, agents, memory, and settings sync both ways.** Install a plugin from inside the container and it shows up on the host; add a custom agent on the host and the container sees it immediately. The auto-memory store at `~/.claude/projects/<workspace>/memory/` is the same file tree from both sides.
-- **Git identity comes from the host.** Commits from inside the container use your host's `user.name` / `user.email` from `~/.gitconfig` and any XDG-style config under `~/.config/git/`. The mounts are read-only so container-side `git config --global` doesn't leak to host config — set those values from the host shell.
+- **Git identity comes from the host.** Commits from inside the container use your host's `user.name` / `user.email` — VS Code's Dev Containers extension auto-copies your `~/.gitconfig` into the container at attach time. Any XDG-style config under `~/.config/git/` flows through via the read-only bind mount. To change git identity, edit `~/.gitconfig` on the host (container-side `git config --global` writes to a container-local file that's discarded on rebuild).
 - **SSH keys flow through (read-only).** Push over SSH remotes and SSH commit signing work inside the container using your host keys. The mount is read-only so container code can't exfiltrate or modify private keys — agent-perspective, this means you get git operations but the keys stay vendor-side.
 - **`gh` auth is shared.** `gh pr create`, `gh pr checks`, `gh issue create` work inside the container without re-authenticating.
 - **No per-workspace duplication.** All your devcontainers across all your projects see the same host CLI state, just like all your host shells do.
@@ -223,5 +224,5 @@ Bump `CLAUDE_CODE_VERSION` and `CODEX_VERSION` in `.devcontainer/devcontainer.js
 | `npm install` fails on tree-sitter-swift / proto / dart | Native build toolchain missing | This shouldn't happen in the devcontainer — verify the apt layer installed `python3 make g++`. If iterating, set `GITNEXUS_SKIP_OPTIONAL_GRAMMARS=1` to skip the vendored grammars |
 | Integration tests fail with `database busy` | LadybugDB single-writer constraint | Don't run host-side `gitnexus analyze` while the container is also analyzing the same repo; choose one writer |
 | API key env vars not visible inside the container | They are intentionally not auto-propagated from the host (so an empty/stale host var can't silently break `*-login` for everyone else) | `export ANTHROPIC_API_KEY=...` / `OPENAI_API_KEY=...` / `CURSOR_API_KEY=...` inside the container shell, or carry it via your VS Code [dotfiles repo](https://code.visualstudio.com/docs/devcontainers/containers#_personalizing-with-dotfile-repositories) for persistence |
-| `git commit` produces commits with empty author | `~/.gitconfig` source path missing on the host | Set `git config --global user.name` / `user.email` from the host shell, then rebuild. The bind mount is read-only so the values come from the host |
+| `git commit` produces commits with empty author | `~/.gitconfig` is missing or empty on the host (VS Code's auto-copy had nothing to copy) | Set `git config --global user.name "Your Name"` and `git config --global user.email "you@example.com"` from the host shell, then rebuild the container |
 | `gh: not logged in` inside the container | `~/.config/gh/` source path missing on the host | Run `gh auth login` from the host shell (or inside the container once); the auth file lands in the shared mount |

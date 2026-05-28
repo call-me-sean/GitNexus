@@ -5,8 +5,10 @@
 //
 // Cross-platform via Node's `os.homedir()` (which reads $HOME on POSIX and
 // %USERPROFILE% on Windows) and `fs.mkdirSync({recursive: true})`. Idempotent
-// — `recursive: true` is a no-op when a directory already exists, and the
-// `.gitconfig` touch is gated on file existence.
+// — each path is skipped if it already exists. `~/.gitconfig` is intentionally
+// not handled here: VS Code's Dev Containers extension auto-copies the host
+// gitconfig into the container at attach time, so a bind mount conflicts with
+// that mechanism and was removed.
 //
 // Host prerequisite: Node.js on PATH. This is the only documented host
 // requirement beyond Docker Desktop and the VS Code Dev Containers
@@ -94,7 +96,3 @@ for (const dir of [
   fs.mkdirSync(path.join(home, dir), { recursive: true });
 }
 
-const gitconfig = path.join(home, ".gitconfig");
-if (!fs.existsSync(gitconfig)) {
-  fs.closeSync(fs.openSync(gitconfig, "a"));
-}
