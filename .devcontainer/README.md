@@ -1,6 +1,6 @@
 # GitNexus Devcontainer
 
-A cross-platform Dev Container that pre-installs Claude Code, OpenAI Codex CLI, and Cursor CLI alongside the GitNexus native build chain. Supported hosts: **macOS, Linux, and Windows 11 via WSL2** (Windows-native is unsupported — see below).
+A cross-platform Dev Container that pre-installs Claude Code, OpenAI Codex CLI, and Cursor CLI alongside the GitNexus native build chain. Supported hosts: **macOS, Linux, Windows 11 via WSL2 (strongly recommended), and Windows 11 native (works but slower, with more bind-mount edge cases — see below).**
 
 ## Quick start
 
@@ -10,9 +10,15 @@ A cross-platform Dev Container that pre-installs Claude Code, OpenAI Codex CLI, 
 4. Wait for the first build (~3–6 minutes) and `postCreateCommand` to finish installing workspace dependencies.
 5. Authenticate the three CLIs once — see [First-time CLI authentication](#first-time-cli-authentication) below.
 
-## Windows 11 — WSL2 is required
+## Windows 11 — WSL2 is strongly recommended
 
-**Windows-native is unsupported.** The devcontainer bind-mounts host config dirs via `${localEnv:HOME}/.claude` (and `.codex`, `.cursor`, `.gitconfig`, `.config/gh`). On Windows-native, the host has `USERPROFILE` set but no `HOME` — VS Code resolves the missing `HOME` to an empty string and Docker tries to bind-mount paths from filesystem root, which silently breaks the host-sync feature. The same checkout-from-Windows-side path also has poor IO and unreliable file watchers (Vite/jest `--watch` will miss changes). The fix is to clone and open the repo inside WSL2:
+Both WSL2 and Windows-native checkouts work. WSL2 is meaningfully better:
+
+- **File-watcher reliability.** Vite/jest `--watch` see file changes reliably on the WSL2 filesystem; Windows-native bind-mounts miss events intermittently.
+- **`npm install` performance.** WSL2-side IO is ~3-5× faster for the heavy `gitnexus` install (tree-sitter native bindings, onnxruntime, vendored grammars).
+- **No bind-mount permission edge cases.** Docker Desktop's Windows bind-mount permission translation can EPERM when a previous container created a file (e.g., `.husky/_/h`) and a new container with a different effective UID tries to overwrite it. WSL2-side filesystems don't have this class of issue (the `post-create.sh` defensive `rm -rf .husky/_` mitigates the most common case but isn't a full fix).
+
+To clone and open the repo inside WSL2:
 
 ```bash
 # 1. Install WSL2 and a Linux distro if you haven't already.
@@ -179,7 +185,7 @@ Bump `CLAUDE_CODE_VERSION` and `CODEX_VERSION` in `.devcontainer/devcontainer.js
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| `EACCES` / `EPERM` writing into `~/.claude`, `~/.codex`, or `~/.cursor` inside the container | Windows-side bind-mount permission translation got out of sync after a UID change between rebuilds | Move to WSL2 — Windows-native isn't supported. See [Windows 11 — WSL2 is required](#windows-11--wsl2-is-required) |
+| `EACCES` / `EPERM` writing into `~/.claude`, `~/.codex`, or `~/.cursor` inside the container | Windows-side bind-mount permission translation got out of sync after a UID change between rebuilds | Move the affected dir aside and let the CLI rebuild it (`mv ~/.claude ~/.claude.bak` and log in again). Long-term: clone in WSL2 — that filesystem doesn't hit this class of issue. See [Windows 11 — WSL2 is strongly recommended](#windows-11--wsl2-is-strongly-recommended) |
 | `EPERM: operation not permitted, copyfile ... '.husky/_/h'` in `postCreateCommand` | Leftover `.husky/_/` from a previous container run on a Windows-side bind mount | `post-create.sh` already runs `rm -rf .husky/_` defensively. If you hit this on an older config, delete `.husky/_/` on the host and rebuild. Long-term: clone in WSL2 |
 | Vite never hot-reloads | Repo cloned on Windows side, not WSL2 | Re-clone inside WSL2 |
 | `gitnexus-web` can't reach the backend | `4747` was remapped or backend isn't running | Verify the Ports panel shows `4747` forwarded with no remap; start the backend with `cd gitnexus && npx gitnexus serve` |

@@ -21,10 +21,17 @@
 
   // Runs on the HOST shell before the container is created. Guarantees the
   // bind-mount source directories below exist so Docker doesn't reject the
-  // mount when a CLI has never been used on this host. Idempotent; safe to
-  // re-run. POSIX-shell only (Linux / macOS / WSL2) — Windows-native is
-  // out of scope per README's WSL2-required posture.
-  "initializeCommand": "mkdir -p $HOME/.claude $HOME/.codex $HOME/.cursor $HOME/.config/gh && touch $HOME/.gitconfig",
+  // mount when a CLI has never been used on this host. OS-keyed because
+  // VS Code runs the host shell in its native form (POSIX on Linux/macOS,
+  // cmd.exe on Windows — which means `mkdir -p` + `$HOME` won't work on
+  // Win32). All three branches are idempotent. WSL is covered by the
+  // linux branch because VS Code's WSL extension runs initializeCommand
+  // in the WSL shell.
+  "initializeCommand": {
+    "linux": "mkdir -p $HOME/.claude $HOME/.codex $HOME/.cursor $HOME/.config/gh && touch $HOME/.gitconfig",
+    "darwin": "mkdir -p $HOME/.claude $HOME/.codex $HOME/.cursor $HOME/.config/gh && touch $HOME/.gitconfig",
+    "win32": "powershell -NoProfile -Command \"$d=$env:USERPROFILE; foreach ($p in '.claude','.codex','.cursor','.config\\gh') { $f=Join-Path $d $p; if (-not (Test-Path $f)) { New-Item -ItemType Directory -Force -Path $f | Out-Null } }; if (-not (Test-Path (Join-Path $d '.gitconfig'))) { New-Item -ItemType File -Path (Join-Path $d '.gitconfig') | Out-Null }\""
+  },
 
   "features": {
     "ghcr.io/devcontainers/features/github-cli:1": {}
