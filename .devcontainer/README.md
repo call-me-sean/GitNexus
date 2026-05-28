@@ -147,6 +147,7 @@ Three build args control pinned versions:
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | `EACCES` on first `claude login` / `codex login` / `cursor-agent login` | Named volume mount got a stale state | `docker volume rm` the relevant `*-config-<devcontainerId>` volume and rebuild |
+| `EPERM: operation not permitted, copyfile ... '.husky/_/h'` in `postCreateCommand` | Leftover `.husky/_/` from a previous container run; Docker Desktop's Windows bind mount won't let the new container's `node` user overwrite it. `postCreateCommand` already runs `rm -rf .husky/_` defensively, but if you hit it on an older config, delete `.husky/_/` on the host (`rm -rf .husky/_`) and rebuild | Long-term: clone the repo inside WSL2 (see [Windows 11 WSL2 setup](#windows-11-primary-host--wsl2-setup)) — WSL-side filesystems don't have this bind-mount class of issue |
 | Vite never hot-reloads on Windows | Repo cloned on Windows side, not WSL2 | Re-clone inside WSL2 (see [WSL2 setup](#windows-11-primary-host--wsl2-setup)) |
 | `gitnexus-web` can't reach the backend | `4747` was remapped or backend isn't running | Verify the Ports panel shows `4747` forwarded with no remap; start the backend with `cd gitnexus && npx gitnexus serve` |
 | `npm install` fails on tree-sitter-swift / proto / dart | Native build toolchain missing | This shouldn't happen in the devcontainer — verify the apt layer installed `python3 make g++`. If iterating, set `GITNEXUS_SKIP_OPTIONAL_GRAMMARS=1` to skip the vendored grammars |
