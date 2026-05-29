@@ -277,4 +277,42 @@ describe('sequential native parser availability', () => {
 
     cap.restore();
   });
+
+  it('aggregates grammar_unavailable and parse_failure fallback reasons in one parsing run', async () => {
+    const cap = _captureLogger();
+
+    vi.mocked(parserLoader.isLanguageAvailable).mockImplementation(
+      (lang: SupportedLanguages, filePath?: string) => {
+        if (lang === SupportedLanguages.CPlusPlus) return true;
+        if (lang !== SupportedLanguages.ObjectiveC) return false;
+        return filePath !== 'NoObjc.mm';
+      },
+    );
+
+    let parseCalls = 0;
+    vi.mocked(safeParse.parseSourceSafe).mockImplementation(() => {
+      parseCalls++;
+      if (parseCalls === 2) throw new Error('objc parse failed once for parse_failure route');
+      return { rootNode: {} } as never;
+    });
+
+    await processParsing(
+      createKnowledgeGraph(),
+      [
+        { path: 'NoObjc.mm', content: 'int no_objc() { return 0; }' },
+        { path: 'FailThenCpp.mm', content: 'int fail_then_cpp() { return 1; }' },
+      ],
+      createSymbolTable(),
+      createASTCache(),
+    );
+
+    const fallbackLog = cap
+      .records()
+      .find((r) => r.msg?.startsWith('[ingestion] Language fallback routes: '));
+
+    expect(fallbackLog?.msg).toContain('objectivec->cpp(.mm):grammar_unavailable: 1');
+    expect(fallbackLog?.msg).toContain('objectivec->cpp(.mm):parse_failure: 1');
+
+    cap.restore();
+  });
 });
