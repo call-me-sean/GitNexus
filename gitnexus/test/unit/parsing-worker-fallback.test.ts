@@ -32,6 +32,7 @@ import type { WorkerPool } from '../../src/core/ingestion/workers/worker-pool.js
 import { WorkerPoolDispatchError } from '../../src/core/ingestion/workers/worker-pool.js';
 import { createKnowledgeGraph } from '../../src/core/graph/graph.js';
 import { createSymbolTable } from '../../src/core/ingestion/model/symbol-table.js';
+import { _captureLogger } from '../../src/core/logger.js';
 
 describe('processParsing — worker-pool error propagation (U20)', () => {
   it('propagates a raw worker-pool throw to the caller without rescuing', async () => {
@@ -141,6 +142,62 @@ describe('processParsing — worker-pool error propagation (U20)', () => {
     // log surfaces the quarantine count for operator visibility.
     expect(result).not.toBeNull();
     expect(progressDetails).toContain('1 worker-quarantined file(s) skipped');
+  });
+
+  it('logs worker fallback route summary when chunk results report parse_failure fallback', async () => {
+    const cap = _captureLogger();
+    const graph = createKnowledgeGraph();
+    const workerPool: WorkerPool = {
+      size: 1,
+      dispatch: vi.fn(async () => [
+        {
+          nodes: [],
+          relationships: [],
+          symbols: [],
+          imports: [],
+          calls: [],
+          assignments: [],
+          heritage: [],
+          routes: [],
+          fetchCalls: [],
+          fetchWrapperDefs: [],
+          decoratorRoutes: [],
+          toolDefs: [],
+          ormQueries: [],
+          constructorBindings: [],
+          fileScopeBindings: [],
+          parsedFiles: [],
+          skippedLanguages: {},
+          languageFallbacks: { 'objectivec->cpp(.mm):parse_failure': 2 },
+          fileCount: 2,
+        },
+      ]),
+      terminate: vi.fn(async () => undefined),
+    };
+
+    await processParsing(
+      graph,
+      [
+        { path: 'src/A.mm', content: 'int a() { return 1; }\n' },
+        { path: 'src/B.mm', content: 'int b() { return 2; }\n' },
+      ],
+      createSymbolTable(),
+      createASTCache(),
+      createASTCache(),
+      () => {},
+      workerPool,
+    );
+
+    expect(
+      cap
+        .records()
+        .some(
+          (r) =>
+            r.msg === '[ingestion] Language fallback routes: objectivec->cpp(.mm):parse_failure: 2',
+        ),
+    ).toBe(true);
+
+    cap.restore();
   });
 });
 
