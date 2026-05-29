@@ -67,22 +67,26 @@ export type FileProgressCallback = (current: number, total: number, filePath: st
  * P2-01 .mm fallback: when Objective-C grammar is unavailable, route .mm to C++.
  * Keep .m strictly on Objective-C.
  */
+type LanguageFallbackReason = 'grammar_unavailable' | 'parse_failure';
+
 const resolveEffectiveLanguage = (
   detected: SupportedLanguages,
   filePath: string,
-): SupportedLanguages => {
+): { language: SupportedLanguages; reason?: LanguageFallbackReason } => {
   if (
     detected === SupportedLanguages.ObjectiveC &&
     filePath.endsWith('.mm') &&
     !isLanguageAvailable(SupportedLanguages.ObjectiveC, filePath) &&
     isLanguageAvailable(SupportedLanguages.CPlusPlus, filePath)
   ) {
-    return SupportedLanguages.CPlusPlus;
+    return { language: SupportedLanguages.CPlusPlus, reason: 'grammar_unavailable' };
   }
-  return detected;
+  return { language: detected };
 };
 
 const MM_OBJC_TO_CPP_FALLBACK_ROUTE = 'objectivec->cpp(.mm)';
+const formatFallbackRoute = (route: string, reason: LanguageFallbackReason): string =>
+  `${route}:${reason}`;
 
 export interface WorkerExtractedData {
   imports: ExtractedImport[];
@@ -424,16 +428,18 @@ const processParsingSequential = async (
     const detectedLanguage = getLanguageFromFilename(file.path);
 
     if (!detectedLanguage) continue;
-    const language = resolveEffectiveLanguage(detectedLanguage, file.path);
+    const effective = resolveEffectiveLanguage(detectedLanguage, file.path);
+    const language = effective.language;
     if (
       detectedLanguage === SupportedLanguages.ObjectiveC &&
       language === SupportedLanguages.CPlusPlus &&
       file.path.endsWith('.mm')
     ) {
-      fallbackRoutes.set(
+      const routeKey = formatFallbackRoute(
         MM_OBJC_TO_CPP_FALLBACK_ROUTE,
-        (fallbackRoutes.get(MM_OBJC_TO_CPP_FALLBACK_ROUTE) ?? 0) + 1,
+        effective.reason ?? 'grammar_unavailable',
       );
+      fallbackRoutes.set(routeKey, (fallbackRoutes.get(routeKey) ?? 0) + 1);
     }
     if (!isLanguageAvailable(language, file.path)) {
       if (skippedByLang) {

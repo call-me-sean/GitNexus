@@ -364,19 +364,23 @@ const setLanguage = (language: SupportedLanguages, filePath: string): void => {
 const resolveEffectiveLanguage = (
   detected: SupportedLanguages,
   filePath: string,
-): SupportedLanguages => {
+): { language: SupportedLanguages; reason?: LanguageFallbackReason } => {
   if (
     detected === SupportedLanguages.ObjectiveC &&
     filePath.endsWith('.mm') &&
     !isLanguageAvailable(SupportedLanguages.ObjectiveC, filePath) &&
     isLanguageAvailable(SupportedLanguages.CPlusPlus, filePath)
   ) {
-    return SupportedLanguages.CPlusPlus;
+    return { language: SupportedLanguages.CPlusPlus, reason: 'grammar_unavailable' };
   }
-  return detected;
+  return { language: detected };
 };
 
+type LanguageFallbackReason = 'grammar_unavailable' | 'parse_failure';
+
 const MM_OBJC_TO_CPP_FALLBACK_ROUTE = 'objectivec->cpp(.mm)';
+const formatFallbackRoute = (route: string, reason: LanguageFallbackReason): string =>
+  `${route}:${reason}`;
 
 // ============================================================================
 // Per-file O(1) memoization — avoids repeated parent-chain walks per symbol.
@@ -785,20 +789,23 @@ const processBatch = (
   for (const file of files) {
     const lang = getLanguageFromFilename(file.path);
     if (!lang) continue;
-    const effectiveLang = resolveEffectiveLanguage(lang, file.path);
+    const effective = resolveEffectiveLanguage(lang, file.path);
     if (
       result.languageFallbacks &&
       lang === SupportedLanguages.ObjectiveC &&
-      effectiveLang === SupportedLanguages.CPlusPlus &&
+      effective.language === SupportedLanguages.CPlusPlus &&
       file.path.endsWith('.mm')
     ) {
-      result.languageFallbacks[MM_OBJC_TO_CPP_FALLBACK_ROUTE] =
-        (result.languageFallbacks[MM_OBJC_TO_CPP_FALLBACK_ROUTE] || 0) + 1;
+      const routeKey = formatFallbackRoute(
+        MM_OBJC_TO_CPP_FALLBACK_ROUTE,
+        effective.reason ?? 'grammar_unavailable',
+      );
+      result.languageFallbacks[routeKey] = (result.languageFallbacks[routeKey] || 0) + 1;
     }
-    let list = byLanguage.get(effectiveLang);
+    let list = byLanguage.get(effective.language);
     if (!list) {
       list = [];
-      byLanguage.set(effectiveLang, list);
+      byLanguage.set(effective.language, list);
     }
     list.push(file);
   }
