@@ -382,6 +382,26 @@ const MM_OBJC_TO_CPP_FALLBACK_ROUTE = 'objectivec->cpp(.mm)';
 const formatFallbackRoute = (route: string, reason: LanguageFallbackReason): string =>
   `${route}:${reason}`;
 
+/**
+ * Test-only fault injection: force Objective-C parse failure on `.mm` so
+ * worker-path fallback to C++ can be exercised deterministically in CI.
+ *
+ * Guarded by both NODE_ENV/VITEST and an explicit env switch so production
+ * runs are unaffected.
+ */
+const shouldForceMmObjcParseFailureForTest = (
+  language: SupportedLanguages,
+  filePath: string,
+): boolean => {
+  const testEnv = process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST);
+  return (
+    testEnv &&
+    process.env.GITNEXUS_TEST_FORCE_MM_OBJC_PARSE_FAILURE === '1' &&
+    language === SupportedLanguages.ObjectiveC &&
+    filePath.endsWith('.mm')
+  );
+};
+
 // ============================================================================
 // Per-file O(1) memoization — avoids repeated parent-chain walks per symbol.
 // Three bare Maps cleared at file boundaries. Map.get() returns undefined for
@@ -1101,6 +1121,9 @@ const processFileGroup = (
 
     let tree;
     try {
+      if (shouldForceMmObjcParseFailureForTest(language, file.path)) {
+        throw new Error('forced test parse failure for Objective-C .mm fallback path');
+      }
       tree = parseSourceSafe(parser, parseContent, undefined, {
         bufferSize: getTreeSitterBufferSize(parseContent),
       });
