@@ -295,6 +295,8 @@ export interface ParseWorkerResult {
    */
   parsedFiles: ParsedFile[];
   skippedLanguages: Record<string, number>;
+  /** Runtime language fallback counters, e.g. objectivec->cpp(.mm): 12 */
+  languageFallbacks?: Record<string, number>;
   fileCount: number;
 }
 
@@ -373,6 +375,8 @@ const resolveEffectiveLanguage = (
   }
   return detected;
 };
+
+const MM_OBJC_TO_CPP_FALLBACK_ROUTE = 'objectivec->cpp(.mm)';
 
 // ============================================================================
 // Per-file O(1) memoization — avoids repeated parent-chain walks per symbol.
@@ -772,6 +776,7 @@ const processBatch = (
     fileScopeBindings: [],
     parsedFiles: [],
     skippedLanguages: {},
+    languageFallbacks: {},
     fileCount: 0,
   };
 
@@ -781,6 +786,15 @@ const processBatch = (
     const lang = getLanguageFromFilename(file.path);
     if (!lang) continue;
     const effectiveLang = resolveEffectiveLanguage(lang, file.path);
+    if (
+      result.languageFallbacks &&
+      lang === SupportedLanguages.ObjectiveC &&
+      effectiveLang === SupportedLanguages.CPlusPlus &&
+      file.path.endsWith('.mm')
+    ) {
+      result.languageFallbacks[MM_OBJC_TO_CPP_FALLBACK_ROUTE] =
+        (result.languageFallbacks[MM_OBJC_TO_CPP_FALLBACK_ROUTE] || 0) + 1;
+    }
     let list = byLanguage.get(effectiveLang);
     if (!list) {
       list = [];
@@ -2059,6 +2073,7 @@ let accumulated: ParseWorkerResult = {
   fileScopeBindings: [],
   parsedFiles: [],
   skippedLanguages: {},
+  languageFallbacks: {},
   fileCount: 0,
 };
 let cumulativeProcessed = 0;
@@ -2089,6 +2104,11 @@ const mergeResult = (target: ParseWorkerResult, src: ParseWorkerResult) => {
   appendAll(target.parsedFiles, src.parsedFiles);
   for (const [lang, count] of Object.entries(src.skippedLanguages)) {
     target.skippedLanguages[lang] = (target.skippedLanguages[lang] || 0) + count;
+  }
+  if (src.languageFallbacks && target.languageFallbacks) {
+    for (const [route, count] of Object.entries(src.languageFallbacks)) {
+      target.languageFallbacks[route] = (target.languageFallbacks[route] || 0) + count;
+    }
   }
   target.fileCount += src.fileCount;
 };
@@ -2180,6 +2200,7 @@ parentPort!.on('message', (msg: WorkerIncomingMessage) => {
         fileScopeBindings: [],
         parsedFiles: [],
         skippedLanguages: {},
+        languageFallbacks: {},
         fileCount: 0,
       };
       cumulativeProcessed = 0;

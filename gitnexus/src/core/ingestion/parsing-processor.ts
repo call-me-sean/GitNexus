@@ -82,6 +82,8 @@ const resolveEffectiveLanguage = (
   return detected;
 };
 
+const MM_OBJC_TO_CPP_FALLBACK_ROUTE = 'objectivec->cpp(.mm)';
+
 export interface WorkerExtractedData {
   imports: ExtractedImport[];
   calls: ExtractedCall[];
@@ -258,9 +260,13 @@ const processParsingWithWorkers = async (
 
   // Merge and log skipped languages from workers
   const skippedLanguages = new Map<string, number>();
+  const fallbackRoutes = new Map<string, number>();
   for (const result of chunkResults) {
     for (const [lang, count] of Object.entries(result.skippedLanguages)) {
       skippedLanguages.set(lang, (skippedLanguages.get(lang) || 0) + count);
+    }
+    for (const [route, count] of Object.entries(result.languageFallbacks ?? {})) {
+      fallbackRoutes.set(route, (fallbackRoutes.get(route) || 0) + count);
     }
   }
   if (skippedLanguages.size > 0) {
@@ -268,6 +274,12 @@ const processParsingWithWorkers = async (
       .map(([lang, count]) => `${lang}: ${count}`)
       .join(', ');
     logger.warn(`  Skipped unsupported languages: ${summary}`);
+  }
+  if (fallbackRoutes.size > 0) {
+    const summary = Array.from(fallbackRoutes.entries())
+      .map(([route, count]) => `${route}: ${count}`)
+      .join(', ');
+    logger.info(`[ingestion] Language fallback routes: ${summary}`);
   }
 
   // Final progress
@@ -393,6 +405,7 @@ const processParsingSequential = async (
   const total = files.length;
   const logSkipped = isVerboseIngestionEnabled();
   const skippedByLang = logSkipped ? new Map<string, number>() : null;
+  const fallbackRoutes = new Map<string, number>();
 
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
@@ -412,6 +425,16 @@ const processParsingSequential = async (
 
     if (!detectedLanguage) continue;
     const language = resolveEffectiveLanguage(detectedLanguage, file.path);
+    if (
+      detectedLanguage === SupportedLanguages.ObjectiveC &&
+      language === SupportedLanguages.CPlusPlus &&
+      file.path.endsWith('.mm')
+    ) {
+      fallbackRoutes.set(
+        MM_OBJC_TO_CPP_FALLBACK_ROUTE,
+        (fallbackRoutes.get(MM_OBJC_TO_CPP_FALLBACK_ROUTE) ?? 0) + 1,
+      );
+    }
     if (!isLanguageAvailable(language, file.path)) {
       if (skippedByLang) {
         skippedByLang.set(language, (skippedByLang.get(language) ?? 0) + 1);
@@ -859,6 +882,12 @@ const processParsingSequential = async (
         `[ingestion] Skipped ${count} ${lang} file(s) in parsing processing — ${lang} parser not available.`,
       );
     }
+  }
+  if (fallbackRoutes.size > 0) {
+    const summary = Array.from(fallbackRoutes.entries())
+      .map(([route, count]) => `${route}: ${count}`)
+      .join(', ');
+    logger.info(`[ingestion] Language fallback routes: ${summary}`);
   }
 };
 
