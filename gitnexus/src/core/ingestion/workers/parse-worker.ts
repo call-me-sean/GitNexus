@@ -12,7 +12,6 @@ import Go from 'tree-sitter-go';
 import Rust from 'tree-sitter-rust';
 import PHP from 'tree-sitter-php';
 import Ruby from 'tree-sitter-ruby';
-import ObjectiveC from 'tree-sitter-objc';
 import { createRequire } from 'node:module';
 import { SupportedLanguages } from 'gitnexus-shared';
 import { getProvider } from '../languages/index.js';
@@ -45,6 +44,12 @@ try {
 let Kotlin: TreeSitterLanguage | null = null;
 try {
   Kotlin = _require('tree-sitter-kotlin');
+} catch {}
+
+// tree-sitter-objc may be unavailable in some environments; .mm can fallback to C++
+let ObjectiveC: TreeSitterLanguage | null = null;
+try {
+  ObjectiveC = _require('tree-sitter-objc');
 } catch {}
 import { getLanguageFromFilename } from 'gitnexus-shared';
 import {
@@ -290,6 +295,8 @@ export interface ParseWorkerResult {
    */
   parsedFiles: ParsedFile[];
   skippedLanguages: Record<string, number>;
+  /** Runtime language fallback counters, e.g. objectivec->cpp(.mm): 12 */
+  languageFallbacks?: Record<string, number>;
   fileCount: number;
 }
 
@@ -320,7 +327,7 @@ const languageMap: Record<string, TreeSitterLanguage> = {
   ...(Kotlin ? { [SupportedLanguages.Kotlin]: Kotlin } : {}),
   [SupportedLanguages.PHP]: PHP.php_only,
   [SupportedLanguages.Ruby]: Ruby,
-  [SupportedLanguages.ObjectiveC]: ObjectiveC,
+  ...(ObjectiveC ? { [SupportedLanguages.ObjectiveC]: ObjectiveC } : {}),
   [SupportedLanguages.Vue]: TypeScript.typescript,
   ...(Dart ? { [SupportedLanguages.Dart]: Dart } : {}),
   ...(Swift ? { [SupportedLanguages.Swift]: Swift } : {}),
@@ -348,6 +355,51 @@ const setLanguage = (language: SupportedLanguages, filePath: string): void => {
   const lang = languageMap[key];
   if (!lang) throw new Error(`Unsupported language: ${language}`);
   parser.setLanguage(lang);
+};
+
+/**
+ * P2-01 .mm fallback: when Objective-C grammar is unavailable, route .mm to C++.
+ * Keep .m strictly on Objective-C.
+ */
+const resolveEffectiveLanguage = (
+  detected: SupportedLanguages,
+  filePath: string,
+): { language: SupportedLanguages; reason?: LanguageFallbackReason } => {
+  if (
+    detected === SupportedLanguages.ObjectiveC &&
+    filePath.endsWith('.mm') &&
+    !isLanguageAvailable(SupportedLanguages.ObjectiveC, filePath) &&
+    isLanguageAvailable(SupportedLanguages.CPlusPlus, filePath)
+  ) {
+    return { language: SupportedLanguages.CPlusPlus, reason: 'grammar_unavailable' };
+  }
+  return { language: detected };
+};
+
+type LanguageFallbackReason = 'grammar_unavailable' | 'parse_failure';
+
+const MM_OBJC_TO_CPP_FALLBACK_ROUTE = 'objectivec->cpp(.mm)';
+const formatFallbackRoute = (route: string, reason: LanguageFallbackReason): string =>
+  `${route}:${reason}`;
+
+/**
+ * Test-only fault injection: force Objective-C parse failure on `.mm` so
+ * worker-path fallback to C++ can be exercised deterministically in CI.
+ *
+ * Guarded by both NODE_ENV/VITEST and an explicit env switch so production
+ * runs are unaffected.
+ */
+const shouldForceMmObjcParseFailureForTest = (
+  language: SupportedLanguages,
+  filePath: string,
+): boolean => {
+  const testEnv = process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST);
+  return (
+    testEnv &&
+    process.env.GITNEXUS_TEST_FORCE_MM_OBJC_PARSE_FAILURE === '1' &&
+    language === SupportedLanguages.ObjectiveC &&
+    filePath.endsWith('.mm')
+  );
 };
 
 // ============================================================================
@@ -748,6 +800,7 @@ const processBatch = (
     fileScopeBindings: [],
     parsedFiles: [],
     skippedLanguages: {},
+    languageFallbacks: {},
     fileCount: 0,
   };
 
@@ -756,10 +809,23 @@ const processBatch = (
   for (const file of files) {
     const lang = getLanguageFromFilename(file.path);
     if (!lang) continue;
-    let list = byLanguage.get(lang);
+    const effective = resolveEffectiveLanguage(lang, file.path);
+    if (
+      result.languageFallbacks &&
+      lang === SupportedLanguages.ObjectiveC &&
+      effective.language === SupportedLanguages.CPlusPlus &&
+      file.path.endsWith('.mm')
+    ) {
+      const routeKey = formatFallbackRoute(
+        MM_OBJC_TO_CPP_FALLBACK_ROUTE,
+        effective.reason ?? 'grammar_unavailable',
+      );
+      result.languageFallbacks[routeKey] = (result.languageFallbacks[routeKey] || 0) + 1;
+    }
+    let list = byLanguage.get(effective.language);
     if (!list) {
       list = [];
-      byLanguage.set(lang, list);
+      byLanguage.set(effective.language, list);
     }
     list.push(file);
   }
@@ -806,7 +872,36 @@ const processBatch = (
       if (isLanguageAvailable(language, regularFiles[0].path)) {
         try {
           setLanguage(language, regularFiles[0].path);
-          processFileGroup(regularFiles, language, queryString, result, onFileProcessed);
+          const parseFailureFallbackFiles = processFileGroup(
+            regularFiles,
+            language,
+            queryString,
+            result,
+            onFileProcessed,
+          );
+          if (
+            parseFailureFallbackFiles.length > 0 &&
+            language === SupportedLanguages.ObjectiveC &&
+            isLanguageAvailable(SupportedLanguages.CPlusPlus, parseFailureFallbackFiles[0].path)
+          ) {
+            const cppProvider = getProvider(SupportedLanguages.CPlusPlus);
+            const cppQueryString = cppProvider.treeSitterQueries;
+            if (cppQueryString) {
+              setLanguage(SupportedLanguages.CPlusPlus, parseFailureFallbackFiles[0].path);
+              processFileGroup(
+                parseFailureFallbackFiles,
+                SupportedLanguages.CPlusPlus,
+                cppQueryString,
+                result,
+                onFileProcessed,
+              );
+              const routeKey = formatFallbackRoute(MM_OBJC_TO_CPP_FALLBACK_ROUTE, 'parse_failure');
+              if (result.languageFallbacks) {
+                result.languageFallbacks[routeKey] =
+                  (result.languageFallbacks[routeKey] || 0) + parseFailureFallbackFiles.length;
+              }
+            }
+          }
         } catch {
           // parser unavailable — skip this language group
         }
@@ -976,7 +1071,8 @@ const processFileGroup = (
   queryString: string,
   result: ParseWorkerResult,
   onFileProcessed?: () => void,
-): void => {
+): ParseWorkerInput[] => {
+  const parseFailureFallbackFiles: ParseWorkerInput[] = [];
   let query: Parser.Query;
   try {
     const lang = parser.getLanguage();
@@ -988,7 +1084,7 @@ const processFileGroup = (
     } else {
       logger.warn(message);
     }
-    return;
+    return parseFailureFallbackFiles;
   }
 
   for (const file of files) {
@@ -1025,10 +1121,21 @@ const processFileGroup = (
 
     let tree;
     try {
+      if (shouldForceMmObjcParseFailureForTest(language, file.path)) {
+        throw new Error('forced test parse failure for Objective-C .mm fallback path');
+      }
       tree = parseSourceSafe(parser, parseContent, undefined, {
         bufferSize: getTreeSitterBufferSize(parseContent),
       });
     } catch (err) {
+      if (
+        language === SupportedLanguages.ObjectiveC &&
+        file.path.endsWith('.mm') &&
+        isLanguageAvailable(SupportedLanguages.CPlusPlus, file.path)
+      ) {
+        parseFailureFallbackFiles.push(file);
+        continue;
+      }
       logger.warn(
         `Failed to parse file ${file.path}: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -2009,6 +2116,8 @@ const processFileGroup = (
       }
     }
   }
+
+  return parseFailureFallbackFiles;
 };
 
 // ============================================================================
@@ -2034,6 +2143,7 @@ let accumulated: ParseWorkerResult = {
   fileScopeBindings: [],
   parsedFiles: [],
   skippedLanguages: {},
+  languageFallbacks: {},
   fileCount: 0,
 };
 let cumulativeProcessed = 0;
@@ -2064,6 +2174,11 @@ const mergeResult = (target: ParseWorkerResult, src: ParseWorkerResult) => {
   appendAll(target.parsedFiles, src.parsedFiles);
   for (const [lang, count] of Object.entries(src.skippedLanguages)) {
     target.skippedLanguages[lang] = (target.skippedLanguages[lang] || 0) + count;
+  }
+  if (src.languageFallbacks && target.languageFallbacks) {
+    for (const [route, count] of Object.entries(src.languageFallbacks)) {
+      target.languageFallbacks[route] = (target.languageFallbacks[route] || 0) + count;
+    }
   }
   target.fileCount += src.fileCount;
 };
@@ -2155,6 +2270,7 @@ parentPort!.on('message', (msg: WorkerIncomingMessage) => {
         fileScopeBindings: [],
         parsedFiles: [],
         skippedLanguages: {},
+        languageFallbacks: {},
         fileCount: 0,
       };
       cumulativeProcessed = 0;

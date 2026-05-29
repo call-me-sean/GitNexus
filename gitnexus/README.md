@@ -362,6 +362,16 @@ npx gitnexus analyze
 
 For repositories with very large source files, `GITNEXUS_WORKER_SUB_BATCH_MAX_BYTES` controls the worker job byte budget. The default is **8388608 bytes (8 MB)**.
 
+### Test-only parser fallback injection (.mm)
+
+For ingestion tests only, GitNexus supports forcing Objective-C parse failure on `.mm` files so the worker/sequential fallback path to C++ can be verified deterministically.
+
+| Variable | Default | Scope | Effect |
+|----------|---------|-------|--------|
+| `GITNEXUS_TEST_FORCE_MM_OBJC_PARSE_FAILURE` | unset | test only | When set to `1` (and running under `NODE_ENV=test` or `VITEST`), forces Objective-C parse failure for `.mm` before retrying with C++ and emits `objectivec->cpp(.mm):parse_failure:*` fallback metrics. |
+
+This switch is ignored in normal production runs and should not be set for `gitnexus analyze` usage.
+
 ### Worker pool resilience tuning
 
 Three env vars expose the pool's resilience layers (respawn budget, cumulative-timeout cap, circuit breaker). Defaults are tuned for typical repos; bump them when an analyze legitimately needs more retries, or lower them to fail-fast on a known-bad shape.

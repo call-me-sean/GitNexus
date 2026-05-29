@@ -63,6 +63,31 @@ import {
 
 export type FileProgressCallback = (current: number, total: number, filePath: string) => void;
 
+/**
+ * P2-01 .mm fallback: when Objective-C grammar is unavailable, route .mm to C++.
+ * Keep .m strictly on Objective-C.
+ */
+type LanguageFallbackReason = 'grammar_unavailable' | 'parse_failure';
+
+const resolveEffectiveLanguage = (
+  detected: SupportedLanguages,
+  filePath: string,
+): { language: SupportedLanguages; reason?: LanguageFallbackReason } => {
+  if (
+    detected === SupportedLanguages.ObjectiveC &&
+    filePath.endsWith('.mm') &&
+    !isLanguageAvailable(SupportedLanguages.ObjectiveC, filePath) &&
+    isLanguageAvailable(SupportedLanguages.CPlusPlus, filePath)
+  ) {
+    return { language: SupportedLanguages.CPlusPlus, reason: 'grammar_unavailable' };
+  }
+  return { language: detected };
+};
+
+const MM_OBJC_TO_CPP_FALLBACK_ROUTE = 'objectivec->cpp(.mm)';
+const formatFallbackRoute = (route: string, reason: LanguageFallbackReason): string =>
+  `${route}:${reason}`;
+
 export interface WorkerExtractedData {
   imports: ExtractedImport[];
   calls: ExtractedCall[];
@@ -239,9 +264,13 @@ const processParsingWithWorkers = async (
 
   // Merge and log skipped languages from workers
   const skippedLanguages = new Map<string, number>();
+  const fallbackRoutes = new Map<string, number>();
   for (const result of chunkResults) {
     for (const [lang, count] of Object.entries(result.skippedLanguages)) {
       skippedLanguages.set(lang, (skippedLanguages.get(lang) || 0) + count);
+    }
+    for (const [route, count] of Object.entries(result.languageFallbacks ?? {})) {
+      fallbackRoutes.set(route, (fallbackRoutes.get(route) || 0) + count);
     }
   }
   if (skippedLanguages.size > 0) {
@@ -249,6 +278,12 @@ const processParsingWithWorkers = async (
       .map(([lang, count]) => `${lang}: ${count}`)
       .join(', ');
     logger.warn(`  Skipped unsupported languages: ${summary}`);
+  }
+  if (fallbackRoutes.size > 0) {
+    const summary = Array.from(fallbackRoutes.entries())
+      .map(([route, count]) => `${route}: ${count}`)
+      .join(', ');
+    logger.info(`[ingestion] Language fallback routes: ${summary}`);
   }
 
   // Final progress
@@ -374,6 +409,7 @@ const processParsingSequential = async (
   const total = files.length;
   const logSkipped = isVerboseIngestionEnabled();
   const skippedByLang = logSkipped ? new Map<string, number>() : null;
+  const fallbackRoutes = new Map<string, number>();
 
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
@@ -389,10 +425,23 @@ const processParsingSequential = async (
 
     if (i % 20 === 0) await yieldToEventLoop();
 
-    const language = getLanguageFromFilename(file.path);
+    const detectedLanguage = getLanguageFromFilename(file.path);
 
-    if (!language) continue;
-    if (!isLanguageAvailable(language)) {
+    if (!detectedLanguage) continue;
+    const effective = resolveEffectiveLanguage(detectedLanguage, file.path);
+    let language = effective.language;
+    if (
+      detectedLanguage === SupportedLanguages.ObjectiveC &&
+      language === SupportedLanguages.CPlusPlus &&
+      file.path.endsWith('.mm')
+    ) {
+      const routeKey = formatFallbackRoute(
+        MM_OBJC_TO_CPP_FALLBACK_ROUTE,
+        effective.reason ?? 'grammar_unavailable',
+      );
+      fallbackRoutes.set(routeKey, (fallbackRoutes.get(routeKey) ?? 0) + 1);
+    }
+    if (!isLanguageAvailable(language, file.path)) {
       if (skippedByLang) {
         skippedByLang.set(language, (skippedByLang.get(language) ?? 0) + 1);
       }
@@ -414,26 +463,53 @@ const processParsingSequential = async (
       isVueSetup = extracted.isSetup;
     }
 
-    // Per-language source-text transform (e.g., UE macro stripping for C++).
-    // Length-preserving — see LanguageProvider.preprocessSource contract.
-    parseContent =
-      getProvider(language).preprocessSource?.(parseContent, file.path) ?? parseContent;
+    const sourceContent = parseContent;
+    const preprocessForLanguage = (lang: SupportedLanguages): string =>
+      getProvider(lang).preprocessSource?.(sourceContent, file.path) ?? sourceContent;
+
+    let parseLanguage = language;
+    let parseContentForLanguage = preprocessForLanguage(parseLanguage);
 
     try {
-      await loadLanguage(language, file.path);
+      await loadLanguage(parseLanguage, file.path);
     } catch {
       continue; // parser unavailable — safety net
     }
 
     let tree: Parser.Tree;
     try {
-      tree = parseSourceSafe(parser, parseContent, undefined, {
-        bufferSize: getTreeSitterBufferSize(parseContent),
+      tree = parseSourceSafe(parser, parseContentForLanguage, undefined, {
+        bufferSize: getTreeSitterBufferSize(parseContentForLanguage),
       });
-    } catch (parseError) {
-      logger.warn(`Skipping unparseable file: ${file.path}`);
-      continue;
+    } catch {
+      const canFallbackOnParseFailure =
+        detectedLanguage === SupportedLanguages.ObjectiveC &&
+        file.path.endsWith('.mm') &&
+        parseLanguage === SupportedLanguages.ObjectiveC &&
+        isLanguageAvailable(SupportedLanguages.CPlusPlus, file.path);
+
+      if (!canFallbackOnParseFailure) {
+        logger.warn(`Skipping unparseable file: ${file.path}`);
+        continue;
+      }
+
+      parseLanguage = SupportedLanguages.CPlusPlus;
+      parseContentForLanguage = preprocessForLanguage(parseLanguage);
+      try {
+        await loadLanguage(parseLanguage, file.path);
+        tree = parseSourceSafe(parser, parseContentForLanguage, undefined, {
+          bufferSize: getTreeSitterBufferSize(parseContentForLanguage),
+        });
+        const routeKey = formatFallbackRoute(MM_OBJC_TO_CPP_FALLBACK_ROUTE, 'parse_failure');
+        fallbackRoutes.set(routeKey, (fallbackRoutes.get(routeKey) ?? 0) + 1);
+      } catch {
+        logger.warn(`Skipping unparseable file: ${file.path}`);
+        continue;
+      }
     }
+
+    language = parseLanguage;
+    parseContent = parseContentForLanguage;
 
     astCache.set(file.path, tree);
 
@@ -839,6 +915,12 @@ const processParsingSequential = async (
         `[ingestion] Skipped ${count} ${lang} file(s) in parsing processing — ${lang} parser not available.`,
       );
     }
+  }
+  if (fallbackRoutes.size > 0) {
+    const summary = Array.from(fallbackRoutes.entries())
+      .map(([route, count]) => `${route}: ${count}`)
+      .join(', ');
+    logger.info(`[ingestion] Language fallback routes: ${summary}`);
   }
 };
 

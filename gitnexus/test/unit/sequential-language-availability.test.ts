@@ -9,6 +9,10 @@ vi.mock('../../src/core/tree-sitter/parser-loader.js', () => ({
   isLanguageAvailable: vi.fn(() => true),
 }));
 
+vi.mock('../../src/core/tree-sitter/safe-parse.js', () => ({
+  parseSourceSafe: vi.fn(() => ({ rootNode: {} })),
+}));
+
 import { createKnowledgeGraph } from '../../src/core/graph/graph.js';
 import { createASTCache } from '../../src/core/ingestion/ast-cache.js';
 import { processParsing } from '../../src/core/ingestion/parsing-processor.js';
@@ -18,11 +22,14 @@ import { processHeritage } from '../../src/core/ingestion/heritage-processor.js'
 import { createSymbolTable } from '../../src/core/ingestion/model/symbol-table.js';
 import { createResolutionContext } from '../../src/core/ingestion/model/resolution-context.js';
 import * as parserLoader from '../../src/core/tree-sitter/parser-loader.js';
+import * as safeParse from '../../src/core/tree-sitter/safe-parse.js';
 
 import { _captureLogger } from '../../src/core/logger.js';
+import { SupportedLanguages } from 'gitnexus-shared';
 describe('sequential native parser availability', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(safeParse.parseSourceSafe).mockImplementation(() => ({ rootNode: {} }) as never);
   });
 
   it('skips Swift files in processImports when the native parser is unavailable', async () => {
@@ -213,5 +220,99 @@ describe('sequential native parser availability', () => {
     } else {
       process.env.GITNEXUS_VERBOSE = previous;
     }
+  });
+
+  it('routes .mm to C++ in processParsing when Objective-C parser is unavailable', async () => {
+    vi.mocked(parserLoader.isLanguageAvailable).mockImplementation(
+      (lang: SupportedLanguages) =>
+        lang === SupportedLanguages.CPlusPlus || lang === SupportedLanguages.TypeScript,
+    );
+
+    await processParsing(
+      createKnowledgeGraph(),
+      [{ path: 'Foo.mm', content: 'int main() { return 0; }' }],
+      createSymbolTable(),
+      createASTCache(),
+    );
+
+    expect(parserLoader.loadLanguage).toHaveBeenCalledWith(SupportedLanguages.CPlusPlus, 'Foo.mm');
+    expect(parserLoader.loadLanguage).not.toHaveBeenCalledWith(
+      SupportedLanguages.ObjectiveC,
+      'Foo.mm',
+    );
+  });
+
+  it('logs parse_failure fallback route when .mm parse fails under Objective-C and retries with C++', async () => {
+    const cap = _captureLogger();
+
+    vi.mocked(parserLoader.isLanguageAvailable).mockImplementation(
+      (lang: SupportedLanguages) =>
+        lang === SupportedLanguages.ObjectiveC || lang === SupportedLanguages.CPlusPlus,
+    );
+
+    let parseCalls = 0;
+    vi.mocked(safeParse.parseSourceSafe).mockImplementation(() => {
+      parseCalls++;
+      if (parseCalls === 1) throw new Error('objc parse failed');
+      return { rootNode: {} } as never;
+    });
+
+    await processParsing(
+      createKnowledgeGraph(),
+      [{ path: 'Foo.mm', content: 'int main() { return 0; }' }],
+      createSymbolTable(),
+      createASTCache(),
+    );
+
+    expect(parserLoader.loadLanguage).toHaveBeenCalledWith(SupportedLanguages.ObjectiveC, 'Foo.mm');
+    expect(parserLoader.loadLanguage).toHaveBeenCalledWith(SupportedLanguages.CPlusPlus, 'Foo.mm');
+    expect(
+      cap
+        .records()
+        .some(
+          (r) =>
+            r.msg === '[ingestion] Language fallback routes: objectivec->cpp(.mm):parse_failure: 1',
+        ),
+    ).toBe(true);
+
+    cap.restore();
+  });
+
+  it('aggregates grammar_unavailable and parse_failure fallback reasons in one parsing run', async () => {
+    const cap = _captureLogger();
+
+    vi.mocked(parserLoader.isLanguageAvailable).mockImplementation(
+      (lang: SupportedLanguages, filePath?: string) => {
+        if (lang === SupportedLanguages.CPlusPlus) return true;
+        if (lang !== SupportedLanguages.ObjectiveC) return false;
+        return filePath !== 'NoObjc.mm';
+      },
+    );
+
+    let parseCalls = 0;
+    vi.mocked(safeParse.parseSourceSafe).mockImplementation(() => {
+      parseCalls++;
+      if (parseCalls === 2) throw new Error('objc parse failed once for parse_failure route');
+      return { rootNode: {} } as never;
+    });
+
+    await processParsing(
+      createKnowledgeGraph(),
+      [
+        { path: 'NoObjc.mm', content: 'int no_objc() { return 0; }' },
+        { path: 'FailThenCpp.mm', content: 'int fail_then_cpp() { return 1; }' },
+      ],
+      createSymbolTable(),
+      createASTCache(),
+    );
+
+    const fallbackLog = cap
+      .records()
+      .find((r) => r.msg?.startsWith('[ingestion] Language fallback routes: '));
+
+    expect(fallbackLog?.msg).toContain('objectivec->cpp(.mm):grammar_unavailable: 1');
+    expect(fallbackLog?.msg).toContain('objectivec->cpp(.mm):parse_failure: 1');
+
+    cap.restore();
   });
 });
