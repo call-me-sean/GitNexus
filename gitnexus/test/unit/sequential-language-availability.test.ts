@@ -9,6 +9,10 @@ vi.mock('../../src/core/tree-sitter/parser-loader.js', () => ({
   isLanguageAvailable: vi.fn(() => true),
 }));
 
+vi.mock('../../src/core/tree-sitter/safe-parse.js', () => ({
+  parseSourceSafe: vi.fn(() => ({ rootNode: {} })),
+}));
+
 import { createKnowledgeGraph } from '../../src/core/graph/graph.js';
 import { createASTCache } from '../../src/core/ingestion/ast-cache.js';
 import { processParsing } from '../../src/core/ingestion/parsing-processor.js';
@@ -18,13 +22,14 @@ import { processHeritage } from '../../src/core/ingestion/heritage-processor.js'
 import { createSymbolTable } from '../../src/core/ingestion/model/symbol-table.js';
 import { createResolutionContext } from '../../src/core/ingestion/model/resolution-context.js';
 import * as parserLoader from '../../src/core/tree-sitter/parser-loader.js';
+import * as safeParse from '../../src/core/tree-sitter/safe-parse.js';
 
 import { _captureLogger } from '../../src/core/logger.js';
 import { SupportedLanguages } from 'gitnexus-shared';
-
 describe('sequential native parser availability', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(safeParse.parseSourceSafe).mockImplementation(() => ({ rootNode: {} }) as never);
   });
 
   it('skips Swift files in processImports when the native parser is unavailable', async () => {
@@ -235,5 +240,41 @@ describe('sequential native parser availability', () => {
       SupportedLanguages.ObjectiveC,
       'Foo.mm',
     );
+  });
+
+  it('logs parse_failure fallback route when .mm parse fails under Objective-C and retries with C++', async () => {
+    const cap = _captureLogger();
+
+    vi.mocked(parserLoader.isLanguageAvailable).mockImplementation(
+      (lang: SupportedLanguages) =>
+        lang === SupportedLanguages.ObjectiveC || lang === SupportedLanguages.CPlusPlus,
+    );
+
+    let parseCalls = 0;
+    vi.mocked(safeParse.parseSourceSafe).mockImplementation(() => {
+      parseCalls++;
+      if (parseCalls === 1) throw new Error('objc parse failed');
+      return { rootNode: {} } as never;
+    });
+
+    await processParsing(
+      createKnowledgeGraph(),
+      [{ path: 'Foo.mm', content: 'int main() { return 0; }' }],
+      createSymbolTable(),
+      createASTCache(),
+    );
+
+    expect(parserLoader.loadLanguage).toHaveBeenCalledWith(SupportedLanguages.ObjectiveC, 'Foo.mm');
+    expect(parserLoader.loadLanguage).toHaveBeenCalledWith(SupportedLanguages.CPlusPlus, 'Foo.mm');
+    expect(
+      cap
+        .records()
+        .some(
+          (r) =>
+            r.msg === '[ingestion] Language fallback routes: objectivec->cpp(.mm):parse_failure: 1',
+        ),
+    ).toBe(true);
+
+    cap.restore();
   });
 });

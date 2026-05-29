@@ -852,7 +852,36 @@ const processBatch = (
       if (isLanguageAvailable(language, regularFiles[0].path)) {
         try {
           setLanguage(language, regularFiles[0].path);
-          processFileGroup(regularFiles, language, queryString, result, onFileProcessed);
+          const parseFailureFallbackFiles = processFileGroup(
+            regularFiles,
+            language,
+            queryString,
+            result,
+            onFileProcessed,
+          );
+          if (
+            parseFailureFallbackFiles.length > 0 &&
+            language === SupportedLanguages.ObjectiveC &&
+            isLanguageAvailable(SupportedLanguages.CPlusPlus, parseFailureFallbackFiles[0].path)
+          ) {
+            const cppProvider = getProvider(SupportedLanguages.CPlusPlus);
+            const cppQueryString = cppProvider.treeSitterQueries;
+            if (cppQueryString) {
+              setLanguage(SupportedLanguages.CPlusPlus, parseFailureFallbackFiles[0].path);
+              processFileGroup(
+                parseFailureFallbackFiles,
+                SupportedLanguages.CPlusPlus,
+                cppQueryString,
+                result,
+                onFileProcessed,
+              );
+              const routeKey = formatFallbackRoute(MM_OBJC_TO_CPP_FALLBACK_ROUTE, 'parse_failure');
+              if (result.languageFallbacks) {
+                result.languageFallbacks[routeKey] =
+                  (result.languageFallbacks[routeKey] || 0) + parseFailureFallbackFiles.length;
+              }
+            }
+          }
         } catch {
           // parser unavailable — skip this language group
         }
@@ -1022,7 +1051,8 @@ const processFileGroup = (
   queryString: string,
   result: ParseWorkerResult,
   onFileProcessed?: () => void,
-): void => {
+): ParseWorkerInput[] => {
+  const parseFailureFallbackFiles: ParseWorkerInput[] = [];
   let query: Parser.Query;
   try {
     const lang = parser.getLanguage();
@@ -1034,7 +1064,7 @@ const processFileGroup = (
     } else {
       logger.warn(message);
     }
-    return;
+    return parseFailureFallbackFiles;
   }
 
   for (const file of files) {
@@ -1075,6 +1105,14 @@ const processFileGroup = (
         bufferSize: getTreeSitterBufferSize(parseContent),
       });
     } catch (err) {
+      if (
+        language === SupportedLanguages.ObjectiveC &&
+        file.path.endsWith('.mm') &&
+        isLanguageAvailable(SupportedLanguages.CPlusPlus, file.path)
+      ) {
+        parseFailureFallbackFiles.push(file);
+        continue;
+      }
       logger.warn(
         `Failed to parse file ${file.path}: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -2055,6 +2093,8 @@ const processFileGroup = (
       }
     }
   }
+
+  return parseFailureFallbackFiles;
 };
 
 // ============================================================================

@@ -429,7 +429,7 @@ const processParsingSequential = async (
 
     if (!detectedLanguage) continue;
     const effective = resolveEffectiveLanguage(detectedLanguage, file.path);
-    const language = effective.language;
+    let language = effective.language;
     if (
       detectedLanguage === SupportedLanguages.ObjectiveC &&
       language === SupportedLanguages.CPlusPlus &&
@@ -463,26 +463,53 @@ const processParsingSequential = async (
       isVueSetup = extracted.isSetup;
     }
 
-    // Per-language source-text transform (e.g., UE macro stripping for C++).
-    // Length-preserving — see LanguageProvider.preprocessSource contract.
-    parseContent =
-      getProvider(language).preprocessSource?.(parseContent, file.path) ?? parseContent;
+    const sourceContent = parseContent;
+    const preprocessForLanguage = (lang: SupportedLanguages): string =>
+      getProvider(lang).preprocessSource?.(sourceContent, file.path) ?? sourceContent;
+
+    let parseLanguage = language;
+    let parseContentForLanguage = preprocessForLanguage(parseLanguage);
 
     try {
-      await loadLanguage(language, file.path);
+      await loadLanguage(parseLanguage, file.path);
     } catch {
       continue; // parser unavailable — safety net
     }
 
     let tree: Parser.Tree;
     try {
-      tree = parseSourceSafe(parser, parseContent, undefined, {
-        bufferSize: getTreeSitterBufferSize(parseContent),
+      tree = parseSourceSafe(parser, parseContentForLanguage, undefined, {
+        bufferSize: getTreeSitterBufferSize(parseContentForLanguage),
       });
-    } catch (parseError) {
-      logger.warn(`Skipping unparseable file: ${file.path}`);
-      continue;
+    } catch {
+      const canFallbackOnParseFailure =
+        detectedLanguage === SupportedLanguages.ObjectiveC &&
+        file.path.endsWith('.mm') &&
+        parseLanguage === SupportedLanguages.ObjectiveC &&
+        isLanguageAvailable(SupportedLanguages.CPlusPlus, file.path);
+
+      if (!canFallbackOnParseFailure) {
+        logger.warn(`Skipping unparseable file: ${file.path}`);
+        continue;
+      }
+
+      parseLanguage = SupportedLanguages.CPlusPlus;
+      parseContentForLanguage = preprocessForLanguage(parseLanguage);
+      try {
+        await loadLanguage(parseLanguage, file.path);
+        tree = parseSourceSafe(parser, parseContentForLanguage, undefined, {
+          bufferSize: getTreeSitterBufferSize(parseContentForLanguage),
+        });
+        const routeKey = formatFallbackRoute(MM_OBJC_TO_CPP_FALLBACK_ROUTE, 'parse_failure');
+        fallbackRoutes.set(routeKey, (fallbackRoutes.get(routeKey) ?? 0) + 1);
+      } catch {
+        logger.warn(`Skipping unparseable file: ${file.path}`);
+        continue;
+      }
     }
+
+    language = parseLanguage;
+    parseContent = parseContentForLanguage;
 
     astCache.set(file.path, tree);
 
