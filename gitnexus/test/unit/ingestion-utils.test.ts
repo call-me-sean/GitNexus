@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
+  classifyHeaderLanguageFromContent,
   getLanguageFromFilename,
+  getLanguageFromFilenameWithContent,
   getSyntaxLanguageFromFilename,
   isBladeTemplateFilename,
   SupportedLanguages,
@@ -67,6 +69,44 @@ describe('getLanguageFromFilename', () => {
   describe('C++', () => {
     it.each(['.cpp', '.cc', '.cxx', '.h', '.hpp', '.hxx', '.hh'])('detects %s files', (ext) => {
       expect(getLanguageFromFilename(`file${ext}`)).toBe(SupportedLanguages.CPlusPlus);
+    });
+  });
+
+  describe('Header classification engine (.h/.pch)', () => {
+    it('classifies Objective-C headers by content', () => {
+      const content = `@interface User : NSObject
+@property(nonatomic, strong) NSString *name;
+@end`;
+      expect(classifyHeaderLanguageFromContent(content)).toBe('objectivec');
+      expect(getLanguageFromFilenameWithContent('User.h', content)).toBe(
+        SupportedLanguages.ObjectiveC,
+      );
+    });
+
+    it('classifies mixed ObjC/C++ headers as Objective-C-first', () => {
+      const content = `@interface User : NSObject
+@end
+namespace gn { template <typename T> class Box {}; }`;
+      expect(classifyHeaderLanguageFromContent(content)).toBe('mixed');
+      expect(getLanguageFromFilenameWithContent('User.h', content)).toBe(
+        SupportedLanguages.ObjectiveC,
+      );
+    });
+
+    it('classifies C-leaning .pch as C', () => {
+      const content = `typedef struct User { int id; } User;
+extern "C" int parse_user(User* u);`;
+      expect(classifyHeaderLanguageFromContent(content)).toBe('c');
+      expect(getLanguageFromFilenameWithContent('Prefix.pch', content)).toBe(SupportedLanguages.C);
+    });
+
+    it('keeps unknown headers backward-compatible to C++', () => {
+      const content = `#pragma once
+#define APP_VERSION "1.0.0"`;
+      expect(classifyHeaderLanguageFromContent(content)).toBe('unknown');
+      expect(getLanguageFromFilenameWithContent('Version.h', content)).toBe(
+        SupportedLanguages.CPlusPlus,
+      );
     });
   });
 

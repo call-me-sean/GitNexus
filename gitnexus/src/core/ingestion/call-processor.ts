@@ -36,7 +36,11 @@ import type { TieredCandidates } from './model/resolution-context.js';
 import { isLanguageAvailable, loadParser, loadLanguage } from '../tree-sitter/parser-loader.js';
 import { getProvider } from './languages/index.js';
 import { generateId } from '../../lib/utils.js';
-import { getLanguageFromFilename, SupportedLanguages } from 'gitnexus-shared';
+import {
+  getLanguageFromFilename,
+  getLanguageFromFilenameWithContent,
+  SupportedLanguages,
+} from 'gitnexus-shared';
 import { isRegistryPrimary } from './registry-primary-flag.js';
 import { isVerboseIngestionEnabled } from './utils/verbose.js';
 import {
@@ -829,7 +833,7 @@ export const processCalls = async (
     const file = files[i];
     if (i % 20 === 0) await yieldToEventLoop();
 
-    const language = getLanguageFromFilename(file.path);
+    const language = getLanguageFromFilenameWithContent(file.path, file.content);
     if (!language) continue;
     // Registry-primary gate: scope-based phase owns CALLS for this lang.
     if (isRegistryPrimary(language)) continue;
@@ -3503,7 +3507,7 @@ export const extractFetchCallsFromFiles = async (
   const result: ExtractedFetchCall[] = [];
 
   for (const file of files) {
-    const language = getLanguageFromFilename(file.path);
+    const language = getLanguageFromFilenameWithContent(file.path, file.content);
     if (!language) continue;
     if (!isLanguageAvailable(language)) continue;
 

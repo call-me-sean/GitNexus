@@ -6,7 +6,7 @@ import { getProvider } from './languages/index.js';
 import { generateId } from '../../lib/utils.js';
 import type { SymbolTableReader, SymbolTableWriter, ExtractedHeritage } from './model/index.js';
 import { ASTCache } from './ast-cache.js';
-import { getLanguageFromFilename, SupportedLanguages } from 'gitnexus-shared';
+import { getLanguageFromFilenameWithContent, SupportedLanguages } from 'gitnexus-shared';
 import { extractVueScript, isVueSetupTopLevel } from './vue-sfc-extractor.js';
 import { yieldToEventLoop } from './utils/event-loop.js';
 import { parseSourceSafe } from '../tree-sitter/safe-parse.js';
@@ -75,7 +75,7 @@ const resolveEffectiveLanguage = (
 ): { language: SupportedLanguages; reason?: LanguageFallbackReason } => {
   if (
     detected === SupportedLanguages.ObjectiveC &&
-    filePath.endsWith('.mm') &&
+    isObjcCppFallbackCandidate(filePath) &&
     !isLanguageAvailable(SupportedLanguages.ObjectiveC, filePath) &&
     isLanguageAvailable(SupportedLanguages.CPlusPlus, filePath)
   ) {
@@ -85,6 +85,13 @@ const resolveEffectiveLanguage = (
 };
 
 const MM_OBJC_TO_CPP_FALLBACK_ROUTE = 'objectivec->cpp(.mm)';
+const HEADER_OBJC_TO_CPP_FALLBACK_ROUTE = 'objectivec->cpp(.h/.pch)';
+
+const isObjcCppFallbackCandidate = (filePath: string): boolean =>
+  filePath.endsWith('.mm') || filePath.endsWith('.h') || filePath.endsWith('.pch');
+
+const fallbackRouteForFile = (filePath: string): string =>
+  filePath.endsWith('.mm') ? MM_OBJC_TO_CPP_FALLBACK_ROUTE : HEADER_OBJC_TO_CPP_FALLBACK_ROUTE;
 const formatFallbackRoute = (route: string, reason: LanguageFallbackReason): string =>
   `${route}:${reason}`;
 
@@ -221,7 +228,7 @@ const processParsingWithWorkers = async (
   // Filter to parseable files only
   const parseableFiles: ParseWorkerInput[] = [];
   for (const file of files) {
-    const lang = getLanguageFromFilename(file.path);
+    const lang = getLanguageFromFilenameWithContent(file.path, file.content);
     if (lang) parseableFiles.push({ path: file.path, content: file.content });
   }
 
@@ -425,7 +432,7 @@ const processParsingSequential = async (
 
     if (i % 20 === 0) await yieldToEventLoop();
 
-    const detectedLanguage = getLanguageFromFilename(file.path);
+    const detectedLanguage = getLanguageFromFilenameWithContent(file.path, file.content);
 
     if (!detectedLanguage) continue;
     const effective = resolveEffectiveLanguage(detectedLanguage, file.path);
@@ -433,10 +440,10 @@ const processParsingSequential = async (
     if (
       detectedLanguage === SupportedLanguages.ObjectiveC &&
       language === SupportedLanguages.CPlusPlus &&
-      file.path.endsWith('.mm')
+      isObjcCppFallbackCandidate(file.path)
     ) {
       const routeKey = formatFallbackRoute(
-        MM_OBJC_TO_CPP_FALLBACK_ROUTE,
+        fallbackRouteForFile(file.path),
         effective.reason ?? 'grammar_unavailable',
       );
       fallbackRoutes.set(routeKey, (fallbackRoutes.get(routeKey) ?? 0) + 1);
@@ -484,7 +491,7 @@ const processParsingSequential = async (
     } catch {
       const canFallbackOnParseFailure =
         detectedLanguage === SupportedLanguages.ObjectiveC &&
-        file.path.endsWith('.mm') &&
+        isObjcCppFallbackCandidate(file.path) &&
         parseLanguage === SupportedLanguages.ObjectiveC &&
         isLanguageAvailable(SupportedLanguages.CPlusPlus, file.path);
 
@@ -500,7 +507,7 @@ const processParsingSequential = async (
         tree = parseSourceSafe(parser, parseContentForLanguage, undefined, {
           bufferSize: getTreeSitterBufferSize(parseContentForLanguage),
         });
-        const routeKey = formatFallbackRoute(MM_OBJC_TO_CPP_FALLBACK_ROUTE, 'parse_failure');
+        const routeKey = formatFallbackRoute(fallbackRouteForFile(file.path), 'parse_failure');
         fallbackRoutes.set(routeKey, (fallbackRoutes.get(routeKey) ?? 0) + 1);
       } catch {
         logger.warn(`Skipping unparseable file: ${file.path}`);

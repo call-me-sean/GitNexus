@@ -19,7 +19,12 @@ import { ASTCache } from './ast-cache.js';
 import Parser from 'tree-sitter';
 import { isLanguageAvailable, loadParser, loadLanguage } from '../tree-sitter/parser-loader.js';
 import { generateId } from '../../lib/utils.js';
-import { getLanguageFromFilename, type NodeLabel, type SupportedLanguages } from 'gitnexus-shared';
+import {
+  getLanguageFromFilename,
+  getLanguageFromFilenameWithContent,
+  type NodeLabel,
+  type SupportedLanguages,
+} from 'gitnexus-shared';
 import { isVerboseIngestionEnabled } from './utils/verbose.js';
 import { yieldToEventLoop } from './utils/event-loop.js';
 import { parseSourceSafe } from '../tree-sitter/safe-parse.js';
@@ -200,7 +205,7 @@ export const processHeritage = async (
     if (i % 20 === 0) await yieldToEventLoop();
 
     // 1. Check language support
-    const language = getLanguageFromFilename(file.path);
+    const language = getLanguageFromFilenameWithContent(file.path, file.content);
     if (!language) continue;
     if (!isLanguageAvailable(language)) {
       if (skippedByLang) {
@@ -407,7 +412,7 @@ export async function extractExtractedHeritageFromFiles(
   const out: ExtractedHeritage[] = [];
 
   for (const file of files) {
-    const language = getLanguageFromFilename(file.path);
+    const language = getLanguageFromFilenameWithContent(file.path, file.content);
     if (!language || !isLanguageAvailable(language)) continue;
 
     const provider = getProvider(language);

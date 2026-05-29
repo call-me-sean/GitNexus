@@ -51,7 +51,7 @@ let ObjectiveC: TreeSitterLanguage | null = null;
 try {
   ObjectiveC = _require('tree-sitter-objc');
 } catch {}
-import { getLanguageFromFilename } from 'gitnexus-shared';
+import { getLanguageFromFilename, getLanguageFromFilenameWithContent } from 'gitnexus-shared';
 import {
   FUNCTION_NODE_TYPES,
   getDefinitionNodeFromCaptures,
@@ -367,7 +367,7 @@ const resolveEffectiveLanguage = (
 ): { language: SupportedLanguages; reason?: LanguageFallbackReason } => {
   if (
     detected === SupportedLanguages.ObjectiveC &&
-    filePath.endsWith('.mm') &&
+    isObjcCppFallbackCandidate(filePath) &&
     !isLanguageAvailable(SupportedLanguages.ObjectiveC, filePath) &&
     isLanguageAvailable(SupportedLanguages.CPlusPlus, filePath)
   ) {
@@ -379,6 +379,13 @@ const resolveEffectiveLanguage = (
 type LanguageFallbackReason = 'grammar_unavailable' | 'parse_failure';
 
 const MM_OBJC_TO_CPP_FALLBACK_ROUTE = 'objectivec->cpp(.mm)';
+const HEADER_OBJC_TO_CPP_FALLBACK_ROUTE = 'objectivec->cpp(.h/.pch)';
+
+const isObjcCppFallbackCandidate = (filePath: string): boolean =>
+  filePath.endsWith('.mm') || filePath.endsWith('.h') || filePath.endsWith('.pch');
+
+const fallbackRouteForFile = (filePath: string): string =>
+  filePath.endsWith('.mm') ? MM_OBJC_TO_CPP_FALLBACK_ROUTE : HEADER_OBJC_TO_CPP_FALLBACK_ROUTE;
 const formatFallbackRoute = (route: string, reason: LanguageFallbackReason): string =>
   `${route}:${reason}`;
 
@@ -807,17 +814,17 @@ const processBatch = (
   // Group by language to minimize setLanguage calls
   const byLanguage = new Map<SupportedLanguages, ParseWorkerInput[]>();
   for (const file of files) {
-    const lang = getLanguageFromFilename(file.path);
+    const lang = getLanguageFromFilenameWithContent(file.path, file.content);
     if (!lang) continue;
     const effective = resolveEffectiveLanguage(lang, file.path);
     if (
       result.languageFallbacks &&
       lang === SupportedLanguages.ObjectiveC &&
       effective.language === SupportedLanguages.CPlusPlus &&
-      file.path.endsWith('.mm')
+      isObjcCppFallbackCandidate(file.path)
     ) {
       const routeKey = formatFallbackRoute(
-        MM_OBJC_TO_CPP_FALLBACK_ROUTE,
+        fallbackRouteForFile(file.path),
         effective.reason ?? 'grammar_unavailable',
       );
       result.languageFallbacks[routeKey] = (result.languageFallbacks[routeKey] || 0) + 1;
@@ -895,7 +902,10 @@ const processBatch = (
                 result,
                 onFileProcessed,
               );
-              const routeKey = formatFallbackRoute(MM_OBJC_TO_CPP_FALLBACK_ROUTE, 'parse_failure');
+              const routeKey = formatFallbackRoute(
+                fallbackRouteForFile(parseFailureFallbackFiles[0].path),
+                'parse_failure',
+              );
               if (result.languageFallbacks) {
                 result.languageFallbacks[routeKey] =
                   (result.languageFallbacks[routeKey] || 0) + parseFailureFallbackFiles.length;
@@ -1130,7 +1140,7 @@ const processFileGroup = (
     } catch (err) {
       if (
         language === SupportedLanguages.ObjectiveC &&
-        file.path.endsWith('.mm') &&
+        isObjcCppFallbackCandidate(file.path) &&
         isLanguageAvailable(SupportedLanguages.CPlusPlus, file.path)
       ) {
         parseFailureFallbackFiles.push(file);

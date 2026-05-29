@@ -11,6 +11,8 @@
 
 import { SupportedLanguages } from './languages.js';
 
+export type HeaderLanguageClassification = 'c' | 'cpp' | 'objectivec' | 'mixed' | 'unknown';
+
 /** Ruby extensionless filenames recognised as Ruby source */
 const RUBY_EXTENSIONLESS_FILES = new Set([
   'Rakefile',
@@ -57,6 +59,69 @@ for (const [lang, exts] of Object.entries(EXTENSION_MAP) as [
   }
 }
 
+const hasExtension = (filePath: string, ext: string): boolean =>
+  filePath.toLowerCase().endsWith(ext.toLowerCase());
+
+const isHeaderLikeFilename = (filePath: string): boolean =>
+  hasExtension(filePath, '.h') || hasExtension(filePath, '.pch');
+
+const OBJC_HEADER_MARKERS = [
+  /@interface\b/,
+  /@implementation\b/,
+  /@protocol\b/,
+  /@property\b/,
+  /@selector\b/,
+  /@class\b/,
+  /NS_ASSUME_NONNULL_(BEGIN|END)/,
+  /#import\s*[<"](?:Foundation|UIKit|AppKit|CoreFoundation|objc\/)/,
+] as const;
+
+const CPP_HEADER_MARKERS = [
+  /\bnamespace\b/,
+  /\btemplate\s*</,
+  /\btypename\b/,
+  /::/,
+  /\bstd::/,
+  /\bconstexpr\b/,
+  /\bnoexcept\b/,
+  /\boverride\b/,
+  /\bfinal\b/,
+  /\bfriend\b/,
+  /\busing\s+namespace\b/,
+  /\boperator\s*[^\s]/,
+] as const;
+
+const C_HEADER_MARKERS = [
+  /\btypedef\s+struct\b/,
+  /\btypedef\s+enum\b/,
+  /\btypedef\s+union\b/,
+  /\bextern\s+"C"\b/,
+] as const;
+
+const hasAnyPattern = (text: string, patterns: readonly RegExp[]): boolean =>
+  patterns.some((p) => p.test(text));
+
+/**
+ * Heuristic classifier for `.h/.pch` content.
+ *
+ * - objectivec: Objective-C-only markers present
+ * - cpp: C++-specific markers present
+ * - c: C-leaning markers present without ObjC/C++ markers
+ * - mixed: both Objective-C and C++ markers present
+ * - unknown: no strong signal
+ */
+export const classifyHeaderLanguageFromContent = (
+  content: string,
+): HeaderLanguageClassification => {
+  const objc = hasAnyPattern(content, OBJC_HEADER_MARKERS);
+  const cpp = hasAnyPattern(content, CPP_HEADER_MARKERS);
+  if (objc && cpp) return 'mixed';
+  if (objc) return 'objectivec';
+  if (cpp) return 'cpp';
+  if (hasAnyPattern(content, C_HEADER_MARKERS)) return 'c';
+  return 'unknown';
+};
+
 /**
  * Laravel Blade templates are source templates whose filename convention ends
  * in `.blade.php`.  They may contain PHP snippets, but the full file is not a
@@ -87,6 +152,34 @@ export const getLanguageFromFilename = (filename: string): SupportedLanguages | 
   }
 
   return null;
+};
+
+/**
+ * Content-aware language detection used by ingestion hot paths for `.h/.pch`.
+ * Falls back to legacy extension mapping for non-header files.
+ */
+export const getLanguageFromFilenameWithContent = (
+  filename: string,
+  content: string,
+): SupportedLanguages | null => {
+  if (!isHeaderLikeFilename(filename)) return getLanguageFromFilename(filename);
+
+  const classified = classifyHeaderLanguageFromContent(content);
+  switch (classified) {
+    case 'objectivec':
+      return SupportedLanguages.ObjectiveC;
+    case 'mixed':
+      // Keep ObjC declarations first-class; parse-failure fallback can still route to C++.
+      return SupportedLanguages.ObjectiveC;
+    case 'c':
+      return SupportedLanguages.C;
+    case 'cpp':
+      return SupportedLanguages.CPlusPlus;
+    case 'unknown':
+    default:
+      // Backward compatible default for plain `.h/.pch`.
+      return SupportedLanguages.CPlusPlus;
+  }
 };
 
 /**

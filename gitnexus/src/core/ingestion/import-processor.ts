@@ -5,7 +5,7 @@ import { isLanguageAvailable, loadParser, loadLanguage } from '../tree-sitter/pa
 import { getProvider, getProviderForFile, providersWithImplicitWiring } from './languages/index.js';
 import type { LanguageProvider } from './language-provider.js';
 import { generateId } from '../../lib/utils.js';
-import { getLanguageFromFilename } from 'gitnexus-shared';
+import { getLanguageFromFilename, getLanguageFromFilenameWithContent } from 'gitnexus-shared';
 import { isVerboseIngestionEnabled } from './utils/verbose.js';
 import { yieldToEventLoop } from './utils/event-loop.js';
 import { parseSourceSafe } from '../tree-sitter/safe-parse.js';
@@ -285,7 +285,7 @@ export const processImports = async (
     if (i % 20 === 0) await yieldToEventLoop();
 
     // 1. Check language support first
-    const language = getLanguageFromFilename(file.path);
+    const language = getLanguageFromFilenameWithContent(file.path, file.content);
     if (!language) continue;
     if (!isLanguageAvailable(language)) {
       if (skippedByLang) {

@@ -50,6 +50,23 @@ describe('sequential native parser availability', () => {
     expect(parserLoader.loadLanguage).not.toHaveBeenCalled();
   });
 
+  it('classifies Objective-C header content for processImports language availability checks', async () => {
+    vi.mocked(parserLoader.isLanguageAvailable).mockReturnValue(false);
+
+    await processImports(
+      createKnowledgeGraph(),
+      [{ path: 'User.h', content: '@interface User : NSObject @end' }],
+      createASTCache(),
+      createResolutionContext(),
+      undefined,
+      '/tmp/repo',
+      ['User.h'],
+    );
+
+    expect(parserLoader.isLanguageAvailable).toHaveBeenCalledWith(SupportedLanguages.ObjectiveC);
+    expect(parserLoader.isLanguageAvailable).not.toHaveBeenCalledWith(SupportedLanguages.CPlusPlus);
+  });
+
   it('warns when processImports skips files in verbose mode', async () => {
     const cap = _captureLogger();
     const previous = process.env.GITNEXUS_VERBOSE;
@@ -99,6 +116,20 @@ describe('sequential native parser availability', () => {
     expect(parserLoader.loadLanguage).not.toHaveBeenCalled();
   });
 
+  it('classifies Objective-C header content for processCalls language availability checks', async () => {
+    vi.mocked(parserLoader.isLanguageAvailable).mockReturnValue(false);
+
+    await processCalls(
+      createKnowledgeGraph(),
+      [{ path: 'User.h', content: '@interface User : NSObject @end' }],
+      createASTCache(),
+      createResolutionContext(),
+    );
+
+    expect(parserLoader.isLanguageAvailable).toHaveBeenCalledWith(SupportedLanguages.ObjectiveC);
+    expect(parserLoader.isLanguageAvailable).not.toHaveBeenCalledWith(SupportedLanguages.CPlusPlus);
+  });
+
   it('warns when processCalls skips files in verbose mode', async () => {
     const cap = _captureLogger();
     const previous = process.env.GITNEXUS_VERBOSE;
@@ -143,6 +174,20 @@ describe('sequential native parser availability', () => {
     ).resolves.toBeUndefined();
 
     expect(parserLoader.loadLanguage).not.toHaveBeenCalled();
+  });
+
+  it('classifies Objective-C header content for processHeritage language availability checks', async () => {
+    vi.mocked(parserLoader.isLanguageAvailable).mockReturnValue(false);
+
+    await processHeritage(
+      createKnowledgeGraph(),
+      [{ path: 'User.h', content: '@interface User : NSObject @end' }],
+      createASTCache(),
+      createResolutionContext(),
+    );
+
+    expect(parserLoader.isLanguageAvailable).toHaveBeenCalledWith(SupportedLanguages.ObjectiveC);
+    expect(parserLoader.isLanguageAvailable).not.toHaveBeenCalledWith(SupportedLanguages.CPlusPlus);
   });
 
   it('warns when processHeritage skips files in verbose mode', async () => {
@@ -272,6 +317,43 @@ describe('sequential native parser availability', () => {
         .some(
           (r) =>
             r.msg === '[ingestion] Language fallback routes: objectivec->cpp(.mm):parse_failure: 1',
+        ),
+    ).toBe(true);
+
+    cap.restore();
+  });
+
+  it('logs parse_failure fallback route for Objective-C header classified from content', async () => {
+    const cap = _captureLogger();
+
+    vi.mocked(parserLoader.isLanguageAvailable).mockImplementation(
+      (lang: SupportedLanguages) =>
+        lang === SupportedLanguages.ObjectiveC || lang === SupportedLanguages.CPlusPlus,
+    );
+
+    let parseCalls = 0;
+    vi.mocked(safeParse.parseSourceSafe).mockImplementation(() => {
+      parseCalls++;
+      if (parseCalls === 1) throw new Error('objc header parse failed');
+      return { rootNode: {} } as never;
+    });
+
+    await processParsing(
+      createKnowledgeGraph(),
+      [{ path: 'User.h', content: '@interface User : NSObject @end' }],
+      createSymbolTable(),
+      createASTCache(),
+    );
+
+    expect(parserLoader.loadLanguage).toHaveBeenCalledWith(SupportedLanguages.ObjectiveC, 'User.h');
+    expect(parserLoader.loadLanguage).toHaveBeenCalledWith(SupportedLanguages.CPlusPlus, 'User.h');
+    expect(
+      cap
+        .records()
+        .some(
+          (r) =>
+            r.msg ===
+            '[ingestion] Language fallback routes: objectivec->cpp(.h/.pch):parse_failure: 1',
         ),
     ).toBe(true);
 
