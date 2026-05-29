@@ -65,41 +65,53 @@ const hasExtension = (filePath: string, ext: string): boolean =>
 const isHeaderLikeFilename = (filePath: string): boolean =>
   hasExtension(filePath, '.h') || hasExtension(filePath, '.pch');
 
-const OBJC_HEADER_MARKERS = [
-  /@interface\b/,
-  /@implementation\b/,
-  /@protocol\b/,
-  /@property\b/,
-  /@selector\b/,
-  /@class\b/,
-  /NS_ASSUME_NONNULL_(BEGIN|END)/,
-  /#import\s*[<"](?:Foundation|UIKit|AppKit|CoreFoundation|objc\/)/,
+type HeaderSignal = { name: string; pattern: RegExp };
+
+const OBJC_HEADER_SIGNALS: readonly HeaderSignal[] = [
+  { name: 'objc.interface', pattern: /@interface\b/ },
+  { name: 'objc.implementation', pattern: /@implementation\b/ },
+  { name: 'objc.protocol', pattern: /@protocol\b/ },
+  { name: 'objc.property', pattern: /@property\b/ },
+  { name: 'objc.selector', pattern: /@selector\b/ },
+  { name: 'objc.class', pattern: /@class\b/ },
+  { name: 'objc.nullability', pattern: /NS_ASSUME_NONNULL_(BEGIN|END)/ },
+  {
+    name: 'objc.import.apple',
+    pattern: /#import\s*[<"](?:Foundation|UIKit|AppKit|CoreFoundation|objc\/)/,
+  },
 ] as const;
 
-const CPP_HEADER_MARKERS = [
-  /\bnamespace\b/,
-  /\btemplate\s*</,
-  /\btypename\b/,
-  /::/,
-  /\bstd::/,
-  /\bconstexpr\b/,
-  /\bnoexcept\b/,
-  /\boverride\b/,
-  /\bfinal\b/,
-  /\bfriend\b/,
-  /\busing\s+namespace\b/,
-  /\boperator\s*[^\s]/,
+const CPP_HEADER_SIGNALS: readonly HeaderSignal[] = [
+  { name: 'cpp.namespace', pattern: /\bnamespace\b/ },
+  { name: 'cpp.template', pattern: /\btemplate\s*</ },
+  { name: 'cpp.typename', pattern: /\btypename\b/ },
+  { name: 'cpp.scope', pattern: /::/ },
+  { name: 'cpp.std', pattern: /\bstd::/ },
+  { name: 'cpp.constexpr', pattern: /\bconstexpr\b/ },
+  { name: 'cpp.noexcept', pattern: /\bnoexcept\b/ },
+  { name: 'cpp.override', pattern: /\boverride\b/ },
+  { name: 'cpp.final', pattern: /\bfinal\b/ },
+  { name: 'cpp.friend', pattern: /\bfriend\b/ },
+  { name: 'cpp.using-namespace', pattern: /\busing\s+namespace\b/ },
+  { name: 'cpp.operator', pattern: /\boperator\s*[^\s]/ },
 ] as const;
 
-const C_HEADER_MARKERS = [
-  /\btypedef\s+struct\b/,
-  /\btypedef\s+enum\b/,
-  /\btypedef\s+union\b/,
-  /\bextern\s+"C"\b/,
+const C_HEADER_SIGNALS: readonly HeaderSignal[] = [
+  { name: 'c.typedef-struct', pattern: /\btypedef\s+struct\b/ },
+  { name: 'c.typedef-enum', pattern: /\btypedef\s+enum\b/ },
+  { name: 'c.typedef-union', pattern: /\btypedef\s+union\b/ },
+  { name: 'c.extern-c', pattern: /\bextern\s+"C"\b/ },
 ] as const;
 
-const hasAnyPattern = (text: string, patterns: readonly RegExp[]): boolean =>
-  patterns.some((p) => p.test(text));
+const matchedSignalNames = (text: string, signals: readonly HeaderSignal[]): string[] =>
+  signals.filter((s) => s.pattern.test(text)).map((s) => s.name);
+
+export interface HeaderLanguageClassificationDetails {
+  classification: HeaderLanguageClassification;
+  objcSignals: string[];
+  cppSignals: string[];
+  cSignals: string[];
+}
 
 /**
  * Heuristic classifier for `.h/.pch` content.
@@ -110,17 +122,29 @@ const hasAnyPattern = (text: string, patterns: readonly RegExp[]): boolean =>
  * - mixed: both Objective-C and C++ markers present
  * - unknown: no strong signal
  */
-export const classifyHeaderLanguageFromContent = (
+export const classifyHeaderLanguageFromContentDetailed = (
   content: string,
-): HeaderLanguageClassification => {
-  const objc = hasAnyPattern(content, OBJC_HEADER_MARKERS);
-  const cpp = hasAnyPattern(content, CPP_HEADER_MARKERS);
-  if (objc && cpp) return 'mixed';
-  if (objc) return 'objectivec';
-  if (cpp) return 'cpp';
-  if (hasAnyPattern(content, C_HEADER_MARKERS)) return 'c';
-  return 'unknown';
+): HeaderLanguageClassificationDetails => {
+  const objcSignals = matchedSignalNames(content, OBJC_HEADER_SIGNALS);
+  const cppSignals = matchedSignalNames(content, CPP_HEADER_SIGNALS);
+  const cSignals = matchedSignalNames(content, C_HEADER_SIGNALS);
+
+  const classification: HeaderLanguageClassification =
+    objcSignals.length > 0 && cppSignals.length > 0
+      ? 'mixed'
+      : objcSignals.length > 0
+        ? 'objectivec'
+        : cppSignals.length > 0
+          ? 'cpp'
+          : cSignals.length > 0
+            ? 'c'
+            : 'unknown';
+
+  return { classification, objcSignals, cppSignals, cSignals };
 };
+
+export const classifyHeaderLanguageFromContent = (content: string): HeaderLanguageClassification =>
+  classifyHeaderLanguageFromContentDetailed(content).classification;
 
 /**
  * Laravel Blade templates are source templates whose filename convention ends

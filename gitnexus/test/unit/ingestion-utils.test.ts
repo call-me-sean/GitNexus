@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   classifyHeaderLanguageFromContent,
+  classifyHeaderLanguageFromContentDetailed,
   getLanguageFromFilename,
   getLanguageFromFilenameWithContent,
   getSyntaxLanguageFromFilename,
@@ -105,6 +106,38 @@ extern "C" int parse_user(User* u);`;
 #define APP_VERSION "1.0.0"`;
       expect(classifyHeaderLanguageFromContent(content)).toBe('unknown');
       expect(getLanguageFromFilenameWithContent('Version.h', content)).toBe(
+        SupportedLanguages.CPlusPlus,
+      );
+    });
+
+    it('classifies __OBJC__ guarded mixed headers as mixed with signal breakdown', () => {
+      const content = `#if defined(__OBJC__)
+#import <Foundation/Foundation.h>
+@interface GNUser : NSObject
+@end
+#else
+namespace gn { template <typename T> class Box {}; }
+#endif`;
+      const detailed = classifyHeaderLanguageFromContentDetailed(content);
+      expect(detailed.classification).toBe('mixed');
+      expect(detailed.objcSignals.length).toBeGreaterThan(0);
+      expect(detailed.cppSignals.length).toBeGreaterThan(0);
+      expect(getLanguageFromFilenameWithContent('GNUser.h', content)).toBe(
+        SupportedLanguages.ObjectiveC,
+      );
+    });
+
+    it('classifies __cplusplus guarded C/C++ compatibility headers as C++ when C++ branch is present', () => {
+      const content = `#ifdef __cplusplus
+namespace gn { class Bridge final {}; }
+extern "C" {
+#endif
+int gn_bridge_init(void);
+#ifdef __cplusplus
+}
+#endif`;
+      expect(classifyHeaderLanguageFromContent(content)).toBe('cpp');
+      expect(getLanguageFromFilenameWithContent('Bridge.pch', content)).toBe(
         SupportedLanguages.CPlusPlus,
       );
     });

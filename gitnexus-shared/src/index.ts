@@ -22,10 +22,14 @@ export {
   getLanguageFromFilename,
   getLanguageFromFilenameWithContent,
   classifyHeaderLanguageFromContent,
+  classifyHeaderLanguageFromContentDetailed,
   getSyntaxLanguageFromFilename,
   isBladeTemplateFilename,
 } from './language-detection.js';
-export type { HeaderLanguageClassification } from './language-detection.js';
+export type {
+  HeaderLanguageClassification,
+  HeaderLanguageClassificationDetails,
+} from './language-detection.js';
 export type { MroStrategy } from './mro-strategy.js';
 
 // Pipeline progress
