@@ -20,6 +20,8 @@ import { createResolutionContext } from '../../src/core/ingestion/model/resoluti
 import * as parserLoader from '../../src/core/tree-sitter/parser-loader.js';
 
 import { _captureLogger } from '../../src/core/logger.js';
+import { SupportedLanguages } from 'gitnexus-shared';
+
 describe('sequential native parser availability', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -213,5 +215,25 @@ describe('sequential native parser availability', () => {
     } else {
       process.env.GITNEXUS_VERBOSE = previous;
     }
+  });
+
+  it('routes .mm to C++ in processParsing when Objective-C parser is unavailable', async () => {
+    vi.mocked(parserLoader.isLanguageAvailable).mockImplementation(
+      (lang: SupportedLanguages) =>
+        lang === SupportedLanguages.CPlusPlus || lang === SupportedLanguages.TypeScript,
+    );
+
+    await processParsing(
+      createKnowledgeGraph(),
+      [{ path: 'Foo.mm', content: 'int main() { return 0; }' }],
+      createSymbolTable(),
+      createASTCache(),
+    );
+
+    expect(parserLoader.loadLanguage).toHaveBeenCalledWith(SupportedLanguages.CPlusPlus, 'Foo.mm');
+    expect(parserLoader.loadLanguage).not.toHaveBeenCalledWith(
+      SupportedLanguages.ObjectiveC,
+      'Foo.mm',
+    );
   });
 });

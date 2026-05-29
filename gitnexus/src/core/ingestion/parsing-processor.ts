@@ -63,6 +63,25 @@ import {
 
 export type FileProgressCallback = (current: number, total: number, filePath: string) => void;
 
+/**
+ * P2-01 .mm fallback: when Objective-C grammar is unavailable, route .mm to C++.
+ * Keep .m strictly on Objective-C.
+ */
+const resolveEffectiveLanguage = (
+  detected: SupportedLanguages,
+  filePath: string,
+): SupportedLanguages => {
+  if (
+    detected === SupportedLanguages.ObjectiveC &&
+    filePath.endsWith('.mm') &&
+    !isLanguageAvailable(SupportedLanguages.ObjectiveC, filePath) &&
+    isLanguageAvailable(SupportedLanguages.CPlusPlus, filePath)
+  ) {
+    return SupportedLanguages.CPlusPlus;
+  }
+  return detected;
+};
+
 export interface WorkerExtractedData {
   imports: ExtractedImport[];
   calls: ExtractedCall[];
@@ -389,10 +408,11 @@ const processParsingSequential = async (
 
     if (i % 20 === 0) await yieldToEventLoop();
 
-    const language = getLanguageFromFilename(file.path);
+    const detectedLanguage = getLanguageFromFilename(file.path);
 
-    if (!language) continue;
-    if (!isLanguageAvailable(language)) {
+    if (!detectedLanguage) continue;
+    const language = resolveEffectiveLanguage(detectedLanguage, file.path);
+    if (!isLanguageAvailable(language, file.path)) {
       if (skippedByLang) {
         skippedByLang.set(language, (skippedByLang.get(language) ?? 0) + 1);
       }
